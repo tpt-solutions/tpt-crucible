@@ -1,0 +1,66 @@
+# Publishes crates to crates.io strictly in dependency order.
+#
+# Requires the CARGO_REGISTRY_TOKEN secret (a crates.io API token with
+# publish rights for the tpt-crucible-* namespace).
+#
+# Trigger: push a `vX.Y.Z` tag, or run manually from the Actions tab.
+
+name: Publish
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: cargo publish (dependency order)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Publish tpt-crucible-common
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          cargo publish --dry-run -p tpt-crucible-common
+          cargo publish -p tpt-crucible-common || echo "already published"
+
+      - name: Publish tpt-crucible-catalyst
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          cargo publish --dry-run -p tpt-crucible-catalyst
+          cargo publish -p tpt-crucible-catalyst || echo "already published"
+
+      # Backends depend only on common/catalyst and may publish in any order.
+      - name: Publish tpt-crucible-fusion
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p tpt-crucible-fusion || echo "already published"
+
+      - name: Publish tpt-crucible-element
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p tpt-crucible-element || echo "already published"
+
+      - name: Publish tpt-crucible-alloy
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p tpt-crucible-alloy || echo "already published"
+
+      # observer joins here once it has a real API surface.
+
+      - name: Publish tpt-crucible-cli
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --all-features -p tpt-crucible-cli || echo "already published"

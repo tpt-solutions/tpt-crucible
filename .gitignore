@@ -1,0 +1,7 @@
+/target
+**/*.rs.bk
+*.pdb
+
+# Frontend (Next.js), once added under frontend/
+frontend/node_modules
+frontend/.next

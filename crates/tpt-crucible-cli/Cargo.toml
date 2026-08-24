@@ -1,0 +1,34 @@
+[package]
+name = "tpt-crucible-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "The unified `tpt` CLI entrypoint for the TPT Crucible hardware-agnostic AI compiler suite"
+documentation = "https://docs.rs/tpt-crucible-cli"
+readme = "README.md"
+keywords = ["ai", "compiler", "cli", "embedded", "fpga"]
+categories = ["compilers", "command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "tpt"
+path = "src/main.rs"
+
+[features]
+default = ["swarm"]
+# ESP32/RP2040 swarm backend (pure Rust, wasm-capable).
+swarm = ["dep:tpt-crucible-alloy"]
+# FPGA overlay backend (opt-in per spec2.txt §4.7).
+fpga = ["dep:tpt-crucible-fusion"]
+
+[dependencies]
+tpt-crucible-common = { workspace = true }
+tpt-crucible-catalyst = { workspace = true }
+tpt-crucible-alloy = { workspace = true, optional = true }
+tpt-crucible-fusion = { workspace = true, optional = true }
+clap = { workspace = true }
+
+[lints]
+workspace = true

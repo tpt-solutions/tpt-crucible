@@ -1,0 +1,19 @@
+[package]
+name = "tpt-crucible-element"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Analog backend for the TPT Crucible suite: physics-to-weight mapping and thermal/noise circuit simulation"
+documentation = "https://docs.rs/tpt-crucible-element"
+readme = "README.md"
+keywords = ["analog", "spice", "simulation", "ai", "hardware"]
+categories = ["simulation", "science"]
+
+[dependencies]
+tpt-crucible-common = { workspace = true }
+
+[lints]
+workspace = true

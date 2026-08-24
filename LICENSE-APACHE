@@ -190,17 +190,3 @@
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
-
----
-
-OPEN-CORE LICENSE NOTICE:
-
-The underlying compilers (MLIR, Yosys, Xyce) are open-source.
-TPT-proprietary layers include:
-- AI-driven optimization passes
-- Hardware-agnostic IR (TPT-IR)
-- Observer dashboard UI
-- Community compilation cache service
-
-These proprietary layers are licensed under Apache 2.0 for this repository.
-Commercial licensing for enterprise features is available upon request.

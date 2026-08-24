@@ -1,0 +1,19 @@
+[package]
+name = "tpt-crucible-fusion"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "FPGA backend for the TPT Crucible suite: high-bandwidth logic synthesis for HBM-backed MAC arrays"
+documentation = "https://docs.rs/tpt-crucible-fusion"
+readme = "README.md"
+keywords = ["fpga", "hbm", "ai", "compiler", "rtl"]
+categories = ["compilers", "hardware-support"]
+
+[dependencies]
+tpt-crucible-common = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,22 @@
+[package]
+name = "tpt-crucible-common"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Shared TPT-IR type definitions and error handling for the TPT Crucible hardware-agnostic AI compiler suite"
+documentation = "https://docs.rs/tpt-crucible-common"
+readme = "README.md"
+keywords = ["ai", "compiler", "ir", "hardware", "tensor"]
+categories = ["data-structures", "encoding"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+bincode = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

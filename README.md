@@ -1,114 +1,81 @@
 # TPT Crucible
 
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 [![Version](https://img.shields.io/badge/version-0.1.0-cyan)](CHANGELOG.md)
 
-**Hardware-agnostic AI compiler suite.** Compile standard AI models (GGUF, ONNX, PyTorch, TensorFlow, SafeTensors, EXL2, AWQ/GPTQ, JAX, TFLite) onto non-traditional hardware: FPGAs, analog compute circuits, microcontroller swarms, photonic processors, neuromorphic chips, and compute-in-memory arrays.
+**Hardware-agnostic AI compiler suite, written in pure Rust.** TPT Crucible bypasses the traditional GPU/AI-hardware monopoly: it lets engineers, researchers, and DIY hardware builders compile, simulate, and deploy standard AI models onto non-traditional, custom-built hardware — FPGAs, analog compute-in-memory circuits, and distributed microcontroller swarms.
 
-> TPT Crucible is **not** a GPU compiler. It explicitly targets edge and custom silicon: Alloy (ESP32/RP2040 swarms), Fusion (Xilinx FPGA), Element (analog/SPICE), Photon (photonic MZI mesh), Pulse (neuromorphic SNN), and Silicon (CIM accelerators).
+> Instead of forcing your AI to fit a commercial GPU, TPT Crucible adapts the AI to fit the physical reality of your hardware.
 
 ---
 
-## Quick Start (5 minutes)
+## Quick Start
 
 ```bash
-# 1. Install Rust, Python 3.10+, Go 1.22+, Node 18+
+# Install the full toolchain (installs the `tpt` CLI)
+cargo install tpt-crucible-cli
 
-# 2. Build the Rust backend
-cargo build --release
+# ...or opt into specific hardware targets
+cargo install tpt-crucible-cli --features fpga,swarm
 
-# 3. Install Python packages
-pip install -e python/tpt_catalyst -e python/tpt_alloy
-
-# 4. Ingest a GGUF model and compile for ESP32 swarm
-tpt-catalyst ingest models/tinyllama.gguf --target alloy --output dist/tinyllama.tptpkg
-
-# 5. Start the Observer dashboard
-cd frontend && npm install && npm run dev
-# Open http://localhost:3000
+# Ingest a GGUF model and compile it for an ESP32 swarm
+tpt ingest models/tinyllama.gguf --target alloy --output dist/tinyllama.tptpkg
 ```
 
-No hardware required — use the Software-in-the-Loop emulator for all targets.
+No hardware required to get started — Alloy and Catalyst compile to WebAssembly for a zero-install, Software-in-the-Loop browser demo.
 
 ---
-
-## Modules
-
-| Module | Target | Language |
-|--------|--------|----------|
-| **TPT Catalyst** | Ingestion → TPT-IR (all formats) | Python + Rust |
-| **TPT Alloy** | MCU swarm (ESP32, RP2040, RISC-V) | Python + Rust |
-| **TPT Fusion** | FPGA (Amaranth HDL → Yosys → Nextpnr) | Python |
-| **TPT Element** | Analog (SPICE/KiCad) | Python |
-| **TPT Photon** | Photonic MZI mesh *(experimental)* | Python |
-| **TPT Pulse** | Neuromorphic ANN→SNN compiler | Python |
-| **TPT Silicon** | Compute-in-Memory accelerators | Python |
-| **TPT Observer** | Real-time dashboard | Go + Next.js |
-| **TPT Emulator** | Software-in-the-Loop | Python + Rust |
-| **TPT Mosaic** | Hybrid cross-hardware orchestration | Python + Rust |
-| **TPT Drivers** | Board SDK + community registry | Rust + Python |
-| **TPT FL** | Federated learning orchestration | Python |
-| **TPT Shell** | Interactive hardware REPL | Python |
-| **TPT Validator** | Accuracy validation vs. reference | Python |
-| **tpt-train** | Training hooks → `.tptprofile` | Python |
-
-## Output: `.tptpkg`
-
-Every compilation produces a `.tptpkg` (ZIP) containing:
-
-```
-model.tptpkg/
-├── manifest.json         # version, model name, SHA-256 hashes
-├── ir/model.tptir        # hardware-agnostic IR
-├── targets/alloy/        # firmware binaries + flash script
-├── targets/fusion/       # bitstream + board profile
-├── targets/element/      # SPICE netlist + KiCad PCB
-├── targets/photon/       # MZI mesh configuration
-├── targets/pulse/        # SNN weight + spike schedule export
-├── targets/silicon/      # CIM weight arrays + bitline ops
-├── compat/preflight.json
-├── quant/quant_profile.json
-├── mosaic/partition.json
-└── provenance/lineage.json  # full audit trail of compilation decisions
-```
 
 ## Architecture
 
+The suite is a "Core and Modules" architecture managed as a single Rust Cargo workspace. The Core translates an AI model into a raw, hardware-agnostic mathematical format (TPT-IR); each Module translates that IR into physical hardware instructions for one class of target.
+
 ```
-AI Model (.gguf / .pt / .onnx / .safetensors / .tflite / ...)
-        ↓
-   TPT Catalyst  →  TPT-IR (.tptir)
-        ↓
-  ┌──┬──┼──┬──┬──┐
-Alloy Fusion Element Photon Pulse Silicon
-  ↓     ↓     ↓      ↓      ↓      ↓
- MCU   RTL  SPICE  MZI   SNN    CIM
-        ↓
-   TPT Observer (live telemetry + 3D topology)
+AI Model (.gguf / .safetensors / .onnx / .pt / .tflite / ...)
+        |
+   tpt-crucible-catalyst  -->  TPT-IR
+        |
+   +----+----+----+
+ alloy fusion element
+   |     |     |
+  MCU   RTL  SPICE
+        |
+   tpt-crucible-observer  (live telemetry dashboard)
 ```
+
+## Modules
+
+| Crate | Purpose |
+|---|---|
+| [`tpt-crucible-common`](crates/tpt-crucible-common) | TPT-IR definitions and shared error handling used by every other crate |
+| [`tpt-crucible-catalyst`](crates/tpt-crucible-catalyst) | Model ingestion (GGUF, SafeTensors, ONNX, PyTorch, TensorFlow, TFLite, AWQ/GPTQ, EXL2, JAX/Flax, Llamafile, Keras) and TPT-IR generation |
+| [`tpt-crucible-fusion`](crates/tpt-crucible-fusion) | FPGA module — high-bandwidth logic synthesis for HBM-backed MAC arrays |
+| [`tpt-crucible-element`](crates/tpt-crucible-element) | Analog module — physics-to-weight mapping and thermal/noise circuit simulation |
+| [`tpt-crucible-alloy`](crates/tpt-crucible-alloy) | Swarm module — distributed graph partitioning and firmware generation for microcontroller swarms (ESP32, RP2040, RISC-V) |
+| [`tpt-crucible-observer`](crates/tpt-crucible-observer) | Real-time telemetry and hardware monitoring dashboard backend |
+| [`tpt-crucible-observer-web`](crates/tpt-crucible-observer-web) | Observer dashboard frontend — a Leptos (Rust/Wasm) app with `wgpu`-rendered 3D swarm topology and PCB views |
+| [`tpt-crucible-cli`](crates/tpt-crucible-cli) | The unified `tpt` binary entrypoint |
+
+The entire suite, frontend included, is pure Rust — the Observer dashboard compiles to WebAssembly via Leptos/`cargo-leptos` and talks to `tpt-crucible-observer`'s WebSocket API, keeping one unified toolchain from compiler backend to generated firmware to UI.
 
 ## Key Features
 
-- **12+ ingestion formats** — GGUF, ONNX, PyTorch, TensorFlow, SafeTensors, HuggingFace Hub, TFLite, AWQ/GPTQ, EXL2, JAX/Flax, Llamafile, Keras
-- **Carbon-aware compilation** — estimates and minimizes grid carbon footprint per target
-- **Model provenance graph** — full lineage audit trail of every compilation decision
-- **AI-powered diagnostics** — LLM-backed `tpt-catalyst doctor` for debugging failed compilations
-- **Federated learning** — split a model across a Crucible hardware deployment, train locally, aggregate privately
-- **Model tournament** — benchmark multiple models head-to-head on the same hardware target
-- **Community cache & marketplace** — share and discover pre-compiled `.tptpkg` artifacts
-- **Interactive REPL** — `tpt-shell` for live hardware introspection and ad-hoc tensor ops
-- **Spark auto-detection** — detects a running TPT Spark instance and uses it as the local LLM backend
+- **Pure Rust platform** — memory safety, zero-cost abstractions, and seamless WebAssembly compilation for a browser-based demo, with one unified toolchain for the compiler backend and generated firmware.
+- **Universal model ingestion** — GGUF, SafeTensors, HuggingFace Hub, ONNX, PyTorch, TensorFlow SavedModel, TFLite, AWQ/GPTQ, EXL2, JAX/Flax, Llamafile, Keras.
+- **Operator fusion** via Rust-based e-graphs (`egg`), and quantization auto-search against an accuracy budget.
+- **FPGA overlay architecture** — cuts per-model FPGA compile time from hours to ~10 seconds.
+- **Transformer-native swarm partitioning** — attention-head parallel + layer-serial hybrid partitioning, with KV-cache-aware memory planning and fault-tolerant execution.
+- **"Reality Check" analog simulation** — injects thermal noise, voltage drift, and component tolerance errors, with an ML-predicted confidence score.
+- **Zero-install browser demo** — Catalyst and Alloy compile to `wasm32-unknown-unknown` for a Software-in-the-Loop emulator that runs entirely client-side.
 
-## Development Phases
+## Development Roadmap
 
-- **Phase 1 (Months 1–6):** Catalyst + Alloy. Milestone: TinyLlama on 16x ESP32. ✓
-- **Phase 2 (Months 6–12):** Fusion. Milestone: Xilinx Alveo bitstream from UI.
-- **Phase 3 (Year 2):** Element + Photon + Pulse + Silicon. Milestone: analog/photonic/neuromorphic/CIM targets.
-- **Phase 4 (Year 2+):** Observer unifying all hardware types + FL + cloud workers.
+- **Phase 1 (Months 1-6): The Catalyst & The Swarm** — Build `tpt-crucible-catalyst` and `tpt-crucible-alloy`. *Milestone: load TinyLlama, partition via Alloy, flash to 16 ESP32s.*
+- **Phase 2 (Months 6-12): The Silicon Canvas** — Build `tpt-crucible-fusion`. *Milestone: select a Xilinx Alveo FPGA board, output a ready-to-flash HBM bitstream.*
+- **Phase 3 (Year 2): The Physics Engine** — Build `tpt-crucible-element`. *Milestone: design a 3-layer analog NN, simulate thermal drift, output a KiCad PCB.*
+- **Phase 4 (Year 2+): The Observer** — Build the `tpt-crucible-observer` dashboard to unify telemetry across all hardware types.
 
-## TPT Spark Integration
-
-[TPT Spark](https://github.com/PhillipC05/tpt-spark) is the companion local GGUF runtime (Tauri v2). Spark runs models on standard hardware; Crucible compiles them for custom hardware. Crucible auto-detects a running Spark instance, uses it as the default offline LLM backend, reads its benchmark baselines for emulator validation, and can replay Spark conversation JSON as regression input. Integration is filesystem + optional IPC only — both apps are independently runnable.
+See [todo.md](todo.md) for the full task-level checklist.
 
 ## Contributing
 
@@ -120,4 +87,11 @@ See [SECURITY.md](SECURITY.md) for how to report vulnerabilities.
 
 ## License
 
-Apache 2.0 — Copyright 2026 TPT Solutions. See [LICENSE](LICENSE).
+Dual-licensed under either of:
+
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+
+at your option. Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this project shall be dual-licensed as above, without any additional terms or conditions.
+
+Copyright 2026 TPT Solutions.

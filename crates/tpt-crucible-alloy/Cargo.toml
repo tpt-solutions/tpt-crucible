@@ -1,0 +1,23 @@
+[package]
+name = "tpt-crucible-alloy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Swarm backend for the TPT Crucible suite: topology-aware distributed graph partitioning, KV-cache planning, and firmware generation for microcontroller swarms"
+documentation = "https://docs.rs/tpt-crucible-alloy"
+readme = "README.md"
+keywords = ["swarm", "esp32", "partitioning", "ai", "embedded"]
+categories = ["compilers", "embedded"]
+
+[dependencies]
+tpt-crucible-common = { workspace = true }
+petgraph = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+bincode = { workspace = true }
+
+[lints]
+workspace = true

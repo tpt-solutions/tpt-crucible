@@ -1,7 +1,7 @@
 # Software Design Document: TPT Crucible (Rust Platform)
 **Version:** 2.0 (Rust Platform Migration)
 **Status:** Draft / Architecture Phase
-**Repository:** `tpt-crucible-rs`
+**Repository:** `tpt-crucible`
 **License:** Dual-licensed under **MIT OR Apache-2.0** (Users may choose pure MIT to avoid Apache entirely).
 **Brand Identity:** Deep-tech, disruptive, physics-meets-software, democratizing hardware.
 

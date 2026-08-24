@@ -1,0 +1,21 @@
+[package]
+name = "tpt-crucible-catalyst"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "The universal model translator for the TPT Crucible suite: ingests SafeTensors/GGUF/ONNX/... models and lowers them into hardware-agnostic TPT-IR"
+documentation = "https://docs.rs/tpt-crucible-catalyst"
+readme = "README.md"
+keywords = ["ai", "compiler", "gguf", "safetensors", "onnx"]
+categories = ["compilers", "parsing"]
+
+[dependencies]
+tpt-crucible-common = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
