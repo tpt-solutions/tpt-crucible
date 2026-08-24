@@ -5,6 +5,7 @@ members = [
   "crates/tpt-alloy",
   "crates/tpt-catalyst-python",
   "crates/tpt-alloy-python",
+  "crates/tpt-crucible-uir-adapter",
 ]
 
 [workspace.package]

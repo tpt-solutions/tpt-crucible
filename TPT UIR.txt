@@ -1,0 +1,141 @@
+RFC: TPT Unified Intermediate Representation (TPT-UIR)
+Status: Draft
+Authors: TPT Solutions Architecture Team
+Date: August 9, 2026
+Target Repositories: tpt-gpu, tpt-crucible, tpt-telos
+1. Motivation and Problem Statement
+The TPT ecosystem currently suffers from IR fragmentation. tpt-gpu utilizes an SSA-based IR (TPTIR) optimized for dynamic, high-throughput GPU execution, while tpt-crucible utilizes a Dataflow Graph IR optimized for static, resource-constrained edge/custom silicon. Furthermore, tpt-telos requires static memory bounds to perform formal verification, but tpt-gpu deliberately removed static shape enforcement to maintain runtime flexibility.
+This fragmentation prevents cross-compilation, blocks unified formal verification, and forces redundant optimization passes.
+Goal: Define a Unified Intermediate Representation (TPT-UIR) that serves as the lowest common denominator, bridging SSA and Graph paradigms through a "Core + Dialects" architecture, and introducing an Opt-In Static Shape Model to unblock formal verification without compromising tpt-gpu's dynamic runtime.
+2. Core Design Principles
+Dialect-Based Extensibility: The Core IR defines only the minimal dataflow and control flow primitives. Hardware-specific and paradigm-specific semantics are encapsulated in Dialects.
+Opt-In Static Analysis: Static shapes and memory bounds are represented as optional metadata. The Core IR remains shape-agnostic by default, preserving tpt-gpu's design, while allowing tpt-crucible and tpt-telos to consume and prove against the metadata when present.
+Zero-Copy Native Mapping: The IR must be representable as plain Rust structs that can be memory-mapped or serialized without complex deserialization, aligning with tpt-archon's zero-copy philosophy.
+3. The Core IR (The Lowest Common Denominator)
+To bridge tpt-gpu's SSA (Operations/Blocks/Regions) and tpt-crucible's Graph (Nodes/Edges), we adopt an MLIR-inspired hierarchical structure. A Dataflow Graph is simply a Core Region containing a single Block, where Operations are Nodes and Values are Edges.
+3.1 Core Data Structures
+
+/// The fundamental unit of computation in TPT-UIR.
+pub struct Operation {
+    /// Unique identifier for this operation within the block.
+    pub id: OpId,
+    
+    /// The dialect and specific operation name (e.g., "tpt_gpu.add", "tpt_crucible.map_flash").
+    pub op_name: OpName, 
+    
+    /// Incoming data dependencies (Edges in a graph, SSA operands in SSA).
+    pub operands: Vec<ValueId>,
+    
+    /// Outgoing data dependencies.
+    pub results: Vec<ValueId>,
+    
+    /// Nested control flow or scoping (e.g., loops, memory scopes).
+    /// Empty for flat dataflow graphs.
+    pub regions: Vec<Region>,
+    
+    /// Optional attributes (types, shapes, memory bounds).
+    pub attributes: Vec<Attribute>,
+}
+
+/// A sequence of operations.
+pub struct Block {
+    pub id: BlockId,
+    pub arguments: Vec<ValueId>, // Block arguments (SSA phi nodes or graph inputs)
+    pub operations: Vec<Operation>,
+}
+
+/// A collection of blocks (represents a function, a loop body, or a memory scope).
+pub struct Region {
+    pub blocks: Vec<Block>,
+}
+
+3.2 Unification Strategy
+For tpt-gpu (SSA): Maps 1:1. tpt-gpu's Operation/Block/Region becomes the Core Operation/Block/Region.
+For tpt-crucible (Graph): ComputationalGraph nodes become Core Operations. Edges become ValueId links between operands and results. The entire graph is wrapped in a single Core Region containing a single Block.
+4. The "Opt-In" Static Shape Model
+This is the critical mechanism to solve the tpt-gpu shape blocker. Shapes are not enforced by the Core IR; they are optional attributes attached to ValueId types.
+4.1 Type and Shape Definitions
+/// Represents the data type and optional shape of a Value.
+pub struct TensorType {
+    pub dtype: DataType, // F16, I8, BF16, etc.
+    
+    /// If None, the tensor is fully dynamic (tpt-gpu default).
+    /// If Some, the tensor has static or symbolic dimensions (required for tpt-crucible/tpt-telos).
+    pub shape: Option<ShapeSpec>,
+}
+
+pub struct ShapeSpec {
+    pub dimensions: Vec<Dimension>,
+}
+
+pub enum Dimension {
+    /// A known, fixed compile-time size (e.g., 4096).
+    Fixed(usize),
+    
+    /// A symbolic size (e.g., "batch_size", "seq_len").
+    /// tpt-telos uses these symbols to build Z3/FM constraint variables.
+    Symbolic(String),
+    
+    /// A dynamic size with a known upper bound.
+    /// Allows tpt-gpu to remain dynamic while giving tpt-telos a worst-case bound to prove against.
+    Bounded { symbol: String, max_value: usize },
+}
+
+Why this works: tpt-gpu can continue to emit TensorType { dtype: F16, shape: None } for dynamic kernels. tpt-crucible will emit shape: Some(...). tpt-telos only triggers its memory prover when shape is Some.
+5. Dialect Specifications
+Dialects extend the Core IR with specific semantics. They do not change the Core structure; they only define valid OpNames and Attributes.
+5.1 tpt.gpu_dialect
+Focus: High-throughput, dynamic execution, SIMT paradigms.
+Key Ops: gpu.launch (defines grid/block dims), gpu.thread_id, gpu.barrier.
+Memory Model: Relies on dynamic allocation. Uses gpu.alloc and gpu.dealloc which map to the runtime's standard allocator.
+Shape Handling: Primarily uses Dimension::Bounded or None.
+5.2 tpt.crucible_dialect
+Focus: Static resource mapping, custom silicon, bare-metal execution.
+Key Ops: crucible.map_to_flash (binds a tensor to a specific flash offset), crucible.route_to_fpga (assigns an op to a specific hardware IP block), crucible.analog_conv (maps math to analog primitives).
+Memory Model: Strictly static. Requires Dimension::Fixed.
+Attributes: Includes hardware routing metadata (e.g., target_ip_block: "dsp_slice_4").
+5.3 tpt.memory_dialect (New)
+Focus: Explicit memory lifecycle for formal verification (tpt-telos).
+This dialect is injected by a compiler pass before verification. It makes implicit memory usage explicit.
+Key Ops:
+mem.scope_begin { lifetime: "layer_1" }
+mem.alloc { size_bytes: Value, scope: "layer_1" }
+mem.scope_end { lifetime: "layer_1" }
+Purpose: Allows tpt-telos to mathematically prove that the sum of active mem.alloc sizes within any mem.scope never exceeds the target hardware's physical memory.
+6. Conversion and Lowering Strategy
+How do we move from the current fragmented state to TPT-UIR?
+Phase 1: Ingestion (Parsing)
+tpt-gpu: The existing TPTIR parser is updated to output Core IR + gpu_dialect ops.
+tpt-crucible: The existing ComputationalGraph parser is updated to output Core IR (flattened to 1 Block) + crucible_dialect ops.
+Phase 2: Canonicalization (The "Bridge")
+A tpt-uir-canonicalizer pass runs on the Core IR.
+It infers tpt.memory_dialect ops by analyzing data dependencies (liveness analysis).
+It validates that crucible_dialect ops only consume Dimension::Fixed tensors.
+Phase 3: Emission (Lowering)
+To tpt-gpu Runtime: The Core IR is stripped of crucible_dialect and memory_dialect ops, and lowered back to tpt-gpu's native TPTIR/Rust runtime calls.
+To tpt-crucible Backend: The Core IR is stripped of gpu_dialect ops, and the crucible_dialect routing attributes are used to generate the final hardware bitstream/analog config.
+7. Integration with tpt-telos (The Prover)
+tpt-telos does not need to understand GPU kernels or FPGA routing. It only needs to understand the Core IR and the tpt.memory_dialect.
+The Proving Algorithm:
+Ingest: tpt-telos loads the TPT-UIR.
+Extract Constraints: It walks the IR looking for mem.alloc ops.
+Symbolic Execution: For each mem.alloc, it checks the size_bytes operand.
+If the size is derived from a Symbolic dimension (e.g., batch_size * 4096 * 2), it creates a Z3/FM variable.
+Scope Analysis: It calculates the peak memory usage by summing active allocations within overlapping mem.scope blocks.
+Verification: It asserts peak_memory <= device_spec.max_memory. If proven, it outputs a ProofArtifact.
+8. Implementation Roadmap
+Milestone 1: The Core Crate (Weeks 1-2)
+Create tpt-uir-core crate.
+Implement the Rust structs for Operation, Block, Region, ValueId, and TensorType.
+Implement a binary serialization format (e.g., FlatBuffers or custom zero-copy bincode) for the Core IR.
+Milestone 2: Dialect Definitions (Weeks 3-4)
+Create tpt-uir-dialects crate.
+Define the enums/traits for gpu_dialect, crucible_dialect, and memory_dialect.
+Implement the liveness analysis pass that injects memory_dialect ops.
+Milestone 3: Ingestion Adapters (Weeks 5-6)
+Update tpt-gpu parser to emit TPT-UIR.
+Update tpt-crucible parser to emit TPT-UIR.
+Crucial: Do not delete the old IRs yet. Run them in parallel and write tests asserting that Old_IR -> TPT-UIR -> Old_IR is lossless.
+Milestone 4: The Prover Bridge (Weeks 7-8)
+Implement the tpt-telos TPT-UIR consumer.
+Run the first end-to-end formal memory proof on a simple tpt-crucible model.

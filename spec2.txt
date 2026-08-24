@@ -1,0 +1,153 @@
+# Software Design Document: TPT Crucible (Rust Platform)
+**Version:** 2.0 (Rust Platform Migration)
+**Status:** Draft / Architecture Phase
+**Repository:** `tpt-crucible-rs`
+**License:** Dual-licensed under **MIT OR Apache-2.0** (Users may choose pure MIT to avoid Apache entirely).
+**Brand Identity:** Deep-tech, disruptive, physics-meets-software, democratizing hardware.
+
+---
+
+## 1. Executive Summary & Purpose
+TPT Crucible is a unified, hardware-agnostic software suite designed to bypass traditional AI hardware monopolies. Its purpose is to allow engineers, researchers, and DIY hardware builders to compile, simulate, and deploy standard AI models onto non-traditional, custom-built hardware architectures.
+
+Instead of forcing users to adapt their AI to fit commercial GPUs, TPT Crucible adapts the AI to fit the physical reality of custom FPGAs, analog compute-in-memory circuits, and distributed microcontroller swarms.
+
+**Platform Shift:** The entire suite is now built on a **pure Rust platform**. This ensures memory safety, zero-cost abstractions, seamless WebAssembly compilation for the browser demo, and a unified toolchain for both the compiler backend and the generated hardware firmware.
+
+---
+
+## 2. High-Level Architecture
+The suite operates on a "Core and Modules" architecture managed via a Rust Cargo Workspace. The Core translates the AI into a raw mathematical format, and the Modules translate that math into physical hardware instructions.
+
+*   **The Core:** `tpt-crucible-catalyst` (Model Ingestion & Intermediate Representation)
+*   **Module 1 (FPGA):** `tpt-crucible-fusion` (High-Bandwidth Logic Synthesis)
+*   **Module 2 (Analog):** `tpt-crucible-element` (Physics-to-Weight Mapping & Noise Simulation)
+*   **Module 3 (Swarm):** `tpt-crucible-alloy` (Distributed Graph Partitioning & Firmware Generation)
+*   **The Dashboard:** `tpt-crucible-observer` (Real-time Telemetry & Hardware Monitoring)
+*   **The CLI:** `tpt-crucible-cli` (The unified `tpt` binary entrypoint)
+*   **The Shared Core:** `tpt-crucible-common` (TPT-IR definitions, shared error handling)
+
+---
+
+## 3. Module Specifications & Data Flow
+
+### 3.1 The Core: `tpt-crucible-catalyst`
+**Purpose:** The universal translator. It ingests standard AI models and strips away the GPU-specific assumptions, converting them into a pure, hardware-agnostic mathematical graph.
+*   **Key Feature: Operator Fusion.** Automatically combines sequential math operations into single, highly optimized blocks using Rust-based e-graphs (`egg` crate) to reduce memory movement.
+*   **Key Feature: Quantization Auto-Search.** Accepts an accuracy budget flag (`--accuracy-budget 0.05`). It tries INT4, validates against a fast SiL pass or `.tptprofile` sensitivity data, and automatically promotes fragile layers to INT8 until the budget is met.
+*   **Key Feature: Streaming Pre-flight.** Operator compatibility analysis is streamed to Observer in real-time via WebSockets as the graph is traversed.
+*   **Key Feature: Toolchain Verifier (`tpt-doctor`).** A sub-command that scans for external tools, checks versions, and runs a smoke test.
+*   **Supported Input Formats:** GGUF, SafeTensors, HuggingFace Hub, ONNX, PyTorch, TensorFlow SavedModel, TFLite, AWQ/GPTQ, EXL2, JAX/Flax, Llamafile, Keras.
+*   **Output:** The TPT Intermediate Representation (TPT-IR), defined as strongly-typed Rust structs in `tpt-crucible-common`, serializable to JSON/Binary.
+
+### 3.2 Module 1: `tpt-crucible-fusion` (For FPGA + HBM)
+**Purpose:** Takes the TPT-IR and generates the hardware description to build custom Matrix Multiplication (MAC) arrays on an FPGA, optimized for High Bandwidth Memory (HBM).
+*   **Key Feature: HBM Auto-Router.** Automatically wires compute arrays to HBM pins using pre-verified memory controllers.
+*   **Key Feature: FPGA Overlay Architecture.** A pre-synthesized "AI overlay" reduces per-model compile cycles from hours to ~10 seconds by writing weight data + datapath configuration into the overlay rather than triggering full resynthesis.
+*   **Implementation:** Uses `rust-hdl` for hardware description in Rust. Wraps Yosys/Nextpnr via Rust FFI/CLI.
+*   **Output:** Synthesizable RTL, memory initialization files, and overlay configuration files (`.fusecfg`).
+
+### 3.3 Module 2: `tpt-crucible-element` (For Analog Compute)
+**Purpose:** Translates floating-point AI weights into physical electrical components and simulates the physical reality of the circuit.
+*   **Key Feature: The "Reality Check" Engine.** Injects simulated thermal noise, voltage drift, and component tolerance errors. Suggests hardware mitigations.
+*   **Implementation:** Uses Rust FFI to interface with Xyce/ngspice. The ML "Reality Check" engine uses the `ort` crate (ONNX Runtime for Rust) to predict drift instantly.
+*   **Output:** SPICE netlists, PCB layout recommendations, and a "Confidence Score".
+
+### 3.4 Module 3: `tpt-crucible-alloy` (For Microcontroller Swarms)
+**Purpose:** Shatters a massive AI model into tiny shards, distributing them across hundreds of cheap microcontrollers (ESP32, RP2040, RISC-V).
+*   **Key Feature: Topology-Aware Partitioning.** Uses `petgraph` and graph theory to assign layers to physical nodes, minimizing data travel time.
+*   **Key Feature: Physical Topology Auto-Discovery.** Reconstructs physical topology automatically from a latency matrix reported by the nodes.
+*   **Key Feature: Attention-Head Parallel Partitioning.** Distributes transformer attention heads across nodes in parallel, then resumes layer-serial partitioning for FFN sublayers.
+*   **Key Feature: KV Cache Distribution.** Allocates KV cache across nodes alongside compute to prevent OOM on memory-constrained nodes.
+*   **Key Feature: Fault-Tolerant Execution & Pipeline Parallelism.** Nodes emit heartbeats; dead nodes are bypassed. Rolling pipeline eliminates inference stalls.
+*   **Implementation:** Generates node-specific Rust/C++ firmware using Rust's `askama` templating engine, ensuring memory-safe, buffer-overflow-free generated code.
+*   **Output:** Unique firmware for every microcontroller, master flashing script, and heartbeat protocol.
+
+### 3.5 The Dashboard: `tpt-crucible-observer`
+**Purpose:** The unified control center to monitor physical hardware.
+*   **Key Feature: Hardware Agnostic Telemetry.** Tracks tokens-per-second, memory bandwidth, thermal drift, and node-latency in a unified cyberpunk-industrial UI.
+*   **Implementation:** The backend is a hyper-fast Rust WebSocket server using `axum` and `tokio-tungstenite`, replacing the original Go specification for lower memory overhead and unified language stack.
+
+---
+
+## 4. Technology Stack (Pure Rust Platform)
+
+To build this efficiently and maintain the "open, disruptive" ethos, the stack relies entirely on Rust for the heavy lifting, leveraging its zero-cost abstractions, memory safety, and WebAssembly capabilities.
+
+### 4.1 Core & AI Ingestion (`tpt-crucible-catalyst`)
+*   **Language:** Pure Rust.
+*   **Model Parsing:** `safetensors` (HuggingFace standard), `gguf` / `candle-core` (for GGUF/PyTorch formats).
+*   **Compiler Infrastructure:** `mlir-sys` / `llvm-sys` (Rust bindings for MLIR). We build a custom MLIR dialect for TPT-IR.
+*   **Math/Graph Engine:** `egg` (E-graphs for advanced operator fusion and math simplification).
+
+### 4.2 FPGA Module (`tpt-crucible-fusion`)
+*   **Language:** Pure Rust.
+*   **Hardware Description:** `rust-hdl` (Allows writing hardware descriptions in Rust, sharing the same type system as the AI compiler).
+*   **Synthesis Wrappers:** Rust `std::process::Command` and FFI to wrap Yosys and Nextpnr silently.
+*   **Memory Controllers:** Integration with LiteX/LiteDRAM via generated Verilog wrappers.
+
+### 4.3 Analog Module (`tpt-crucible-element`)
+*   **Language:** Pure Rust.
+*   **Simulation Engine:** FFI bindings to Xyce or ngspice C-libraries. Rust orchestrates the simulation sweeps and parses output.
+*   **ML Engine:** `ort` (ONNX Runtime in Rust) for the lightweight neural network that predicts thermal/noise drift.
+
+### 4.4 Swarm Module (`tpt-crucible-alloy`)
+*   **Language:** Pure Rust.
+*   **Graph Partitioning:** `petgraph` for graph representation, with FFI wrappers to METIS/KaFFPa for gold-standard partitioning.
+*   **Firmware Generation:** `askama` or `tera` (Rust templating engines) to generate memory-safe C++/Rust firmware for microcontrollers.
+*   **Hardware Abstraction:** Generated firmware integrates with PlatformIO or Zephyr RTOS.
+
+### 4.5 UI/UX & Dashboard (`tpt-crucible-observer`)
+*   **Frontend:** React.js + Next.js.
+*   **3D Visualization:** Three.js / React Three Fiber (for Swarm topology and PCB layouts).
+*   **Backend API:** Pure Rust using `axum` (web framework) and `tokio-tungstenite` (WebSockets). Handles concurrent telemetry streams with minimal memory overhead.
+*   **Styling:** Tailwind CSS with a custom "industrial blueprint" dark-mode theme.
+
+### 4.6 Automation Philosophy
+TPT Crucible treats manual steps as bugs.
+*   **Toolchain errors** are intercepted in Rust, matched against a catalog of failure patterns, and surfaced as structured messages.
+*   **Quantization** is decided by the compiler auto-search loop.
+*   **Compilation results** are regression-checked automatically.
+*   **Flashing** is always parallel (OTA for WiFi, parallel USB hubs).
+*   **AI assistance** degrades gracefully (features hidden if no LLM/ML model is configured).
+
+### 4.7 Accessibility & Democratization
+*   **Zero-Install Browser Demo:** Because `tpt-crucible-catalyst` and `tpt-crucible-alloy` are pure Rust, they compile directly to **WebAssembly** (`wasm32-unknown-unknown`) via `wasm-pack`. The SiL emulator drives the Observer frontend entirely in the browser via Web Workers.
+*   **Pre-compiled Package Marketplace:** Community registry of `.tptpkg` files.
+*   **Open Hardware Reference Board:** KiCad PCB design for an ESP32 swarm carrier board in `hardware/reference-designs/alloy-carrier/`.
+*   **One-Line Bootstrap:** `cargo install tpt-crucible-cli` installs the full toolchain. Optional features via cargo features: `cargo install tpt-crucible-cli --features fpga,swarm`.
+
+---
+
+## 5. Development Roadmap
+
+**Phase 1: The Catalyst & The Swarm (Months 1-6)**
+*   Build `tpt-crucible-catalyst` (MLIR integration, SafeTensors/GGUF parsing).
+*   Build `tpt-crucible-alloy` (Swarm module, Wasm compilation for browser demo).
+*   *Milestone:* Load TinyLlama, partition via Alloy, flash to 16 ESP32s.
+
+**Phase 2: The Silicon Canvas (Months 6-12)**
+*   Build `tpt-crucible-fusion` (FPGA module). Integrate `rust-hdl` and LiteX.
+*   *Milestone:* Select a Xilinx Alveo FPGA board, output a ready-to-flash bitstream using HBM.
+
+**Phase 3: The Physics Engine (Year 2)**
+*   Build `tpt-crucible-element` (Analog module). Train the ML "Reality Check" model.
+*   *Milestone:* Design a 3-layer analog NN, simulate thermal drift, output KiCad PCB.
+
+**Phase 4: The Observer (Year 2+)**
+*   Build the `tpt-crucible-observer` dashboard to unify telemetry across all hardware types.
+
+---
+
+## 6. Key Differentiators (The "TPT" Advantage)
+
+1.  **Pure Rust Platform:** Memory safety, zero-cost abstractions, and seamless WebAssembly compilation for the browser demo. Unified language stack from compiler to dashboard to generated firmware.
+2.  **We ignore the GPU path:** We embrace physical constraints and use software to engineer around them.
+3.  **Open-Core & Permissive Licensing:** Dual-licensed **MIT OR Apache-2.0**. Underlying compilers are open-source; we provide the glue, UI, and AI optimization.
+4.  **FPGA Overlay Architecture:** Cuts per-model FPGA compile time from hours to seconds.
+5.  **Transformer-Native Swarm Partitioning:** Attention-head parallel + layer-serial hybrid partitioning.
+6.  **KV Cache-Aware Memory Planning:** Prevents silent OOMs on memory-constrained swarm nodes.
+7.  **Fault-Tolerant Inference:** Swarms degrade gracefully when nodes fail.
+8.  **Zero-Friction Entry:** Browser-based Wasm demo, pre-compiled packages, and reference carrier board.
+9.  **Universal Model Ingestion:** Supports every major format (SafeTensors, GGUF, ONNX, TFLite, EXL2, JAX, etc.).
+10. **Automation-First Pipeline:** Quantization, pre-flight, regression, flashing, and tuning are automated by default.
