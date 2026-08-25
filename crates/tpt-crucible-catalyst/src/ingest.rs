@@ -46,22 +46,82 @@ impl Ingestor for GgufIngestor {
     }
 }
 
+struct OnnxIngestor;
+
+impl Ingestor for OnnxIngestor {
+    fn format(&self) -> ModelFormat {
+        ModelFormat::Onnx
+    }
+
+    fn ingest(&self, path: &Path) -> Result<Graph> {
+        crate::onnx::ingest(path)
+    }
+}
+
+struct LlamafileIngestor;
+
+impl Ingestor for LlamafileIngestor {
+    fn format(&self) -> ModelFormat {
+        ModelFormat::Llamafile
+    }
+
+    fn ingest(&self, path: &Path) -> Result<Graph> {
+        crate::llamafile::ingest(path)
+    }
+}
+
+struct AwqIngestor;
+
+impl Ingestor for AwqIngestor {
+    fn format(&self) -> ModelFormat {
+        ModelFormat::Awq
+    }
+
+    fn ingest(&self, path: &Path) -> Result<Graph> {
+        crate::quant::ingest_awq(path)
+    }
+}
+
+struct GptqIngestor;
+
+impl Ingestor for GptqIngestor {
+    fn format(&self) -> ModelFormat {
+        ModelFormat::Gptq
+    }
+
+    fn ingest(&self, path: &Path) -> Result<Graph> {
+        crate::quant::ingest_gptq(path)
+    }
+}
+
 /// Ingestor for a format, if Catalyst can read it today.
 ///
-/// Formats recognized but not yet implemented (ONNX, PyTorch, TensorFlow,
-/// AWQ/GPTQ, EXL2, JAX/Flax, Llamafile-as-container, Keras) return `None`;
-/// see `todo.md` Phase 1 for the roadmap.
+/// Formats recognized but not yet implemented (PyTorch, TensorFlow,
+/// TFLite, EXL2, JAX/Flax, Keras) return `None`; see `todo.md`
+/// Phase 1 for the roadmap.
 pub fn ingestor_for(format: ModelFormat) -> Option<Box<dyn Ingestor>> {
     match format {
         ModelFormat::SafeTensors => Some(Box::new(SafeTensorsIngestor)),
         ModelFormat::Gguf => Some(Box::new(GgufIngestor)),
+        ModelFormat::Onnx => Some(Box::new(OnnxIngestor)),
+        ModelFormat::Llamafile => Some(Box::new(LlamafileIngestor)),
+        ModelFormat::Awq => Some(Box::new(AwqIngestor)),
+        ModelFormat::Gptq => Some(Box::new(GptqIngestor)),
         _ => None,
     }
 }
 
 /// True when [`ingest_path`] can handle this format today.
 pub fn is_supported(format: ModelFormat) -> bool {
-    matches!(format, ModelFormat::SafeTensors | ModelFormat::Gguf)
+    matches!(
+        format,
+        ModelFormat::SafeTensors
+            | ModelFormat::Gguf
+            | ModelFormat::Onnx
+            | ModelFormat::Llamafile
+            | ModelFormat::Awq
+            | ModelFormat::Gptq
+    )
 }
 
 /// Detect the format of `path` and load it into TPT-IR.
@@ -94,13 +154,13 @@ mod tests {
     fn unsupported_format_is_not_implemented() {
         let dir = std::env::temp_dir().join("catalyst-ingest-tests");
         std::fs::create_dir_all(&dir).unwrap();
-        let p = dir.join("model.onnx");
+        let p = dir.join("weights.pt");
         let mut f = std::fs::File::create(&p).unwrap();
-        f.write_all(b"\x08\x0aplaceholder").unwrap();
+        f.write_all(b"\x80\x02pickle-payload").unwrap();
 
         let err = ingest_path(&p).unwrap_err();
         assert!(matches!(err, Error::NotImplemented { .. }));
-        assert!(err.to_string().contains("onnx"));
+        assert!(err.to_string().contains("pytorch"));
     }
 
     #[test]
@@ -119,5 +179,28 @@ mod tests {
         let g = ingest_path(&p).unwrap();
         assert_eq!(g.metadata("source_format"), Some("safetensors"));
         assert_eq!(g.len(), 1);
+    }
+
+    #[test]
+    fn onnx_end_to_end_via_registry() {
+        let dir = std::env::temp_dir().join("catalyst-ingest-tests");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("model.onnx");
+        std::fs::write(&p, crate::onnx::tests::fixture_matmul_add_softmax()).unwrap();
+
+        let g = ingest_path(&p).unwrap();
+        assert_eq!(g.metadata("source_format"), Some("onnx"));
+        g.validate().unwrap();
+        assert!(is_supported(ModelFormat::Onnx));
+    }
+
+    #[test]
+    fn every_format_reports_support_status() {
+        // Implemented formats must resolve to an ingestor; the rest must be
+        // honest NotImplemented errors.
+        for f in ModelFormat::ALL {
+            let supported = is_supported(*f);
+            assert_eq!(ingestor_for(*f).is_some(), supported, "{f}");
+        }
     }
 }

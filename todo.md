@@ -31,14 +31,14 @@ broken down per-crate using the key features from `spec2.txt` section 3.
 - [x] SafeTensors ingestion (native parser + encoder, no heavy deps)
 - [x] GGUF ingestion (native v2/v3 parser: metadata tree, tensor directory,
       legacy block-quant dtypes; candle-core integration optional/later)
-- [ ] ONNX ingestion
+- [x] ONNX ingestion (native protobuf reader; core-op subset: MatMul/Gemm/elementwise/Softmax/LayerNorm/Reshape/Transpose/Concat/Cast/Gather)
 - [ ] PyTorch ingestion
 - [ ] TensorFlow SavedModel ingestion
 - [ ] TFLite ingestion
-- [ ] AWQ/GPTQ ingestion
+- [x] AWQ/GPTQ ingestion (SafeTensors containers + quant-name tagging; dequant kernels pending)
 - [ ] EXL2 ingestion
 - [ ] JAX/Flax ingestion
-- [ ] Llamafile ingestion
+- [x] Llamafile ingestion (embedded-GGUF extraction feeding the native GGUF parser)
 - [ ] Keras ingestion
 - [ ] HuggingFace Hub fetch integration (format layer recognizes HF artifacts; network fetch pending)
 - [ ] Operator fusion via `egg` e-graphs
@@ -86,6 +86,9 @@ broken down per-crate using the key features from `spec2.txt` section 3.
 - [ ] LiteX/LiteDRAM integration via generated Verilog wrappers
 - [ ] Output: synthesizable RTL, memory initialization files, `.fusecfg` overlay configuration files
 - [ ] **Milestone:** Select a Xilinx Alveo FPGA board, output a ready-to-flash bitstream using HBM
+- [ ] Hybrid silicon+FPGA boards: FPGA-aware partitioning in `alloy` and the
+      `alloy`<->`fusion` bridge, once `fusion::compile` is real. Node capability
+      is already representable via `tpt_crucible_alloy::topology::FpgaProfile`.
 
 ## Phase 3: The Physics Engine (Year 2)
 

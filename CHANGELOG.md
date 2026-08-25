@@ -21,6 +21,11 @@ policy note in todo.md).
   ingestion (native parser: metadata tree, tensor directory, block-quant dtype
   mapping, Llama hyperparameter extraction); format detection for all twelve
   roadmap formats; `Ingestor` registry.
+- **Catalyst**: ONNX ingestion via a native protobuf wire-format reader
+   (MatMul/Gemm lowering, elementwise, Softmax, LayerNorm, Reshape,
+   Transpose, Concat, Cast, Gather); Llamafile ingestion (embedded-GGUF
+   extraction); AWQ/GPTQ quantized SafeTensors containers tagged with
+   ``quant_format`` metadata.
 - **Catalyst**: `tpt-doctor` toolchain verifier scanning python/esptool/yosys/
   nextpnr/kicad-cli.
 - **Alloy**: topology auto-discovery from node-reported latency/bandwidth

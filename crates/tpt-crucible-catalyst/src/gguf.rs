@@ -508,6 +508,32 @@ pub fn ingest(path: &Path) -> Result<Graph> {
 }
 
 #[cfg(test)]
+/// Minimal GGUF v3 fixture shared with sibling-module tests (e.g. llamafile).
+pub(crate) fn fixture_gguf_v3() -> Vec<u8> {
+    let mut b = Vec::new();
+    b.extend_from_slice(b"GGUF");
+    b.extend_from_slice(&3u32.to_le_bytes()); // version
+    b.extend_from_slice(&1u64.to_le_bytes()); // tensor count
+    b.extend_from_slice(&0u64.to_le_bytes()); // kv count
+
+    // one f32 [2] tensor
+    let name = b"t";
+    b.extend_from_slice(&(name.len() as u64).to_le_bytes());
+    b.extend_from_slice(name);
+    b.extend_from_slice(&1u32.to_le_bytes()); // n_dims
+    b.extend_from_slice(&2u64.to_le_bytes()); // ne[0]
+    b.extend_from_slice(&0u32.to_le_bytes()); // ggml F32
+    b.extend_from_slice(&0u64.to_le_bytes()); // offset
+
+    while b.len() % 32 != 0 {
+        b.push(0);
+    }
+    b.extend_from_slice(&1.0f32.to_le_bytes());
+    b.extend_from_slice(&2.0f32.to_le_bytes());
+    b
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use tpt_crucible_common::NodeId;

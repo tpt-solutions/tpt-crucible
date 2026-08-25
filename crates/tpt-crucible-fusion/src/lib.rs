@@ -12,6 +12,14 @@
 //! [`Error::NotImplemented`].
 //!
 //! Roadmap items live in `todo.md`.
+//!
+//! ## Hybrid boards
+//!
+//! `tpt_crucible_alloy::topology::FpgaProfile` already describes the fabric
+//! (LUTs, DSP slices, block RAM) a swarm node's FPGA offers, for boards that
+//! pair normal silicon with reconfigurable logic. Once this crate compiles
+//! real overlays, that's the shape its output should target so `alloy` and
+//! `fusion` share one contract instead of inventing a second one here.
 
 use tpt_crucible_common::error::{Error, Result};
 use tpt_crucible_common::Graph;

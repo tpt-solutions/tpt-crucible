@@ -1,17 +1,18 @@
 //! # tpt-crucible-catalyst
 //!
-//! **The Core / universal translator** (`spec2.txt` §3.1): ingests standard AI
-//! model formats, strips GPU-specific assumptions, and lowers everything into
-//! the hardware-agnostic TPT-IR graph defined in [`tpt_crucible_common`].
+//! **The Core / universal translator** (`spec2.txt` section 3.1): ingests
+//! standard AI model formats, strips GPU-specific assumptions, and lowers
+//! everything into the hardware-agnostic TPT-IR graph defined in
+//! [`tpt_crucible_common`].
 //!
-//! ## Today
+//! ## Implemented today
 //!
-//! * `format` — identifies all 12 target container formats.
-
-//! * [`ingest`] — dispatches to format ingestors; **SafeTensors** and
-//!   **GGUF (v2/v3)** are fully implemented natively (no heavy deps,
-//!   wasm-ready).
-//! * [`doctor`] — `tpt-doctor` toolchain verifier.
+//! * [`format::ModelFormat`] — identifies all 12 target container formats.
+//! * [`ingest`] - dispatches to format ingestors. Native parsers:
+//!   **SafeTensors**, **GGUF (v2/v3)**, **ONNX** (core-op subset),
+//!   **Llamafile** (embedded-GGUF extraction), **AWQ/GPTQ** (quantized
+//!   SafeTensors containers tagged with ``quant_format`` metadata).
+//! * [`doctor`] - `tpt-doctor` toolchain verifier.
 //!
 //! ```no_run
 //! use tpt_crucible_catalyst::ingest_path;
@@ -21,16 +22,19 @@
 //! # Ok::<(), tpt_crucible_common::Error>(())
 //! ```
 //!
-//! ## Roadmap (tracked in `todo.md`)
+//! ## Roadmap (tracked in todo.md)
 //!
-//! ONNX/PyTorch/TensorFlow/TFLite/AWQ/GPTQ/EXL2/JAX/Keras ingestion,
-//! `egg`-based operator fusion, quantization auto-search against an accuracy
-//! budget, streaming pre-flight over WebSockets, and a custom MLIR dialect.
+//! PyTorch/TensorFlow/TFLite/EXL2/JAX/Keras ingestion, egg-based operator
+//! fusion, quantization auto-search against an accuracy budget, streaming
+//! pre-flight over WebSockets, and a custom MLIR dialect.
 
 pub mod doctor;
 pub mod format;
 pub mod gguf;
 pub mod ingest;
+pub mod llamafile;
+pub mod onnx;
+pub mod quant;
 pub mod safetensors;
 
 pub use format::ModelFormat;

@@ -40,6 +40,14 @@ enum FormatArg {
     Safetensors,
     /// llama.cpp `.gguf`.
     Gguf,
+    /// Open Neural Network Exchange `.onnx`.
+    Onnx,
+    /// Llamafile executable with embedded GGUF.
+    Llamafile,
+    /// AWQ quantized SafeTensors checkpoint.
+    Awq,
+    /// GPTQ quantized SafeTensors checkpoint.
+    Gptq,
 }
 
 impl From<FormatArg> for catalyst::ModelFormat {
@@ -47,6 +55,10 @@ impl From<FormatArg> for catalyst::ModelFormat {
         match f {
             FormatArg::Safetensors => catalyst::ModelFormat::SafeTensors,
             FormatArg::Gguf => catalyst::ModelFormat::Gguf,
+            FormatArg::Onnx => catalyst::ModelFormat::Onnx,
+            FormatArg::Llamafile => catalyst::ModelFormat::Llamafile,
+            FormatArg::Awq => catalyst::ModelFormat::Awq,
+            FormatArg::Gptq => catalyst::ModelFormat::Gptq,
         }
     }
 }

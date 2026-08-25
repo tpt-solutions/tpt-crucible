@@ -48,7 +48,7 @@ AI Model (.gguf / .safetensors / .onnx / .pt / .tflite / ...)
 | Crate | Purpose |
 |---|---|
 | [`tpt-crucible-common`](crates/tpt-crucible-common) | TPT-IR definitions and shared error handling used by every other crate |
-| [`tpt-crucible-catalyst`](crates/tpt-crucible-catalyst) | Model ingestion (GGUF, SafeTensors, ONNX, PyTorch, TensorFlow, TFLite, AWQ/GPTQ, EXL2, JAX/Flax, Llamafile, Keras) and TPT-IR generation |
+| [`tpt-crucible-catalyst`](crates/tpt-crucible-catalyst) | Model ingestion into TPT-IR - SafeTensors, GGUF, ONNX, Llamafile, AWQ/GPTQ implemented natively; PyTorch/TF/TFLite/EXL2/JAX/Keras on the roadmap |
 | [`tpt-crucible-fusion`](crates/tpt-crucible-fusion) | FPGA module — high-bandwidth logic synthesis for HBM-backed MAC arrays |
 | [`tpt-crucible-element`](crates/tpt-crucible-element) | Analog module — physics-to-weight mapping and thermal/noise circuit simulation |
 | [`tpt-crucible-alloy`](crates/tpt-crucible-alloy) | Swarm module — distributed graph partitioning and firmware generation for microcontroller swarms (ESP32, RP2040, RISC-V) |

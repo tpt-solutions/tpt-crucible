@@ -39,6 +39,26 @@ impl NodeArch {
     }
 }
 
+/// Reconfigurable fabric attached to a node, alongside its normal silicon.
+///
+/// A node with `fpga: Some(_)` is a hybrid board: `arch` still describes its
+/// fixed ISA, and this describes the FPGA fabric sitting next to it. The two
+/// are orthogonal, so this is a field on [`SwarmNode`] rather than a new
+/// [`NodeArch`] variant.
+///
+/// This is descriptive metadata only today — no partitioning or firmware
+/// logic reads it yet. It exists so `tpt-crucible-fusion` has a named shape
+/// to target once it compiles real overlays (see its module docs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FpgaProfile {
+    /// Available look-up tables.
+    pub luts: u32,
+    /// Available DSP slices.
+    pub dsp_slices: u32,
+    /// Block RAM capacity in bytes.
+    pub block_ram_bytes: u64,
+}
+
 /// One physical node of the swarm.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwarmNode {
@@ -50,16 +70,36 @@ pub struct SwarmNode {
     pub arch: NodeArch,
     /// Usable memory in bytes (PSRAM + SRAM minus firmware overhead).
     pub memory_bytes: u64,
+    /// Reconfigurable fabric attached to this node, if any (hybrid board).
+    pub fpga: Option<FpgaProfile>,
 }
 
 impl SwarmNode {
-    /// Convenience constructor.
+    /// Convenience constructor for a plain (non-hybrid) node.
     pub fn new(id: usize, name: impl Into<String>, arch: NodeArch, memory_bytes: u64) -> Self {
         Self {
             id,
             name: name.into(),
             arch,
             memory_bytes,
+            fpga: None,
+        }
+    }
+
+    /// Convenience constructor for a hybrid silicon+FPGA node.
+    pub fn with_fpga(
+        id: usize,
+        name: impl Into<String>,
+        arch: NodeArch,
+        memory_bytes: u64,
+        fpga: FpgaProfile,
+    ) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            arch,
+            memory_bytes,
+            fpga: Some(fpga),
         }
     }
 }

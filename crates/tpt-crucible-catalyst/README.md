@@ -8,9 +8,14 @@ Implemented today:
 * **SafeTensors** ingestion (native parser + encoder)
 * **GGUF v2/v3** ingestion (native parser: metadata tree, tensor directory,
   block-quant dtype mapping, Llama hyperparameter extraction)
-* Format detection for all twelve roadmap formats (ONNX, PyTorch, TensorFlow,
-  TFLite, AWQ/GPTQ, EXL2, JAX/Flax, Llamafile, Keras recognized; ingestion on
-  the roadmap)
+* **ONNX** ingestion via a native protobuf wire-format reader (MatMul/Gemm
+  lowering, elementwise ops, Softmax, LayerNorm, Reshape, Transpose, Concat,
+  Cast, Gather)
+* **Llamafile** ingestion (embedded-GGUF extraction)
+* **AWQ / GPTQ** quantized SafeTensors containers (tagged with `quant_format`
+  metadata; dequantization kernels are a later pass)
+* Format detection for all twelve roadmap formats (PyTorch, TensorFlow,
+  TFLite, EXL2, JAX/Flax, Keras recognized; ingestion on the roadmap)
 * `tpt-doctor`: external toolchain discovery and verification
 
 Pure Rust, no heavy dependencies, wasm-compatible.

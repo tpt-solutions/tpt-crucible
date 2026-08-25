@@ -353,7 +353,7 @@ pub fn partition(
 mod tests {
     use super::*;
     use crate::kv_cache::KvCacheRequest;
-    use crate::topology::{NodeArch, SwarmNode, Topology};
+    use crate::topology::{FpgaProfile, NodeArch, SwarmNode, Topology};
     use tpt_crucible_common::ops::{AttentionAttrs, SoftmaxAttrs};
     use tpt_crucible_common::{DType, Tensor, TensorDesc};
 
@@ -547,5 +547,27 @@ mod tests {
         let plan = partition(&g, &topo, &PartitionOptions::default()).unwrap();
         // The whole model must sit on the big node.
         assert!(plan.assignments.values().all(|&n| n == 0));
+    }
+
+    #[test]
+    fn hybrid_node_partitions_like_a_plain_one() {
+        // A silicon+FPGA node must not change placement or panic — the
+        // profile is descriptive metadata only, not read by the planner.
+        let g = mlp_graph(64);
+        let nodes = vec![SwarmNode::with_fpga(
+            0,
+            "hybrid",
+            NodeArch::RiscV,
+            2 * MIB,
+            FpgaProfile {
+                luts: 20_000,
+                dsp_slices: 64,
+                block_ram_bytes: 512 * 1024,
+            },
+        )];
+        let topo = Topology::from_parts(nodes, vec![vec![0.0]], vec![vec![0.0]]).unwrap();
+        let plan = partition(&g, &topo, &PartitionOptions::default()).unwrap();
+        assert_eq!(plan.shards.len(), 1);
+        assert_eq!(topo.nodes[0].fpga.unwrap().luts, 20_000);
     }
 }

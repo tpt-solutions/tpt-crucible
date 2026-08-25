@@ -300,12 +300,21 @@ impl Graph {
 
     /// Load from `path`, sniffing binary vs JSON via the magic header.
     pub fn load(path: impl AsRef<std::path::Path>) -> Result<Self> {
+        let path = path.as_ref();
         let bytes = std::fs::read(path)?;
         if bytes.len() >= BINARY_MAGIC.len() && &bytes[..BINARY_MAGIC.len()] == BINARY_MAGIC {
             Self::from_binary(&bytes)
         } else {
-            let text = String::from_utf8(bytes)?;
-            Self::from_json_str(&text)
+            match String::from_utf8(bytes) {
+                Ok(text) => Self::from_json_str(&text),
+                Err(_) => Err(Error::ParseFormat {
+                    path: path.display().to_string(),
+                    format: "tpt-ir".into(),
+                    reason: "file is neither a TPTIR binary nor JSON — is this a raw model file? \
+                         run `tpt ingest` on it first"
+                        .into(),
+                }),
+            }
         }
     }
 }
