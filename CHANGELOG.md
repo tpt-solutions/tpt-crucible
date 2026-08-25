@@ -26,6 +26,20 @@ policy note in todo.md).
    Transpose, Concat, Cast, Gather); Llamafile ingestion (embedded-GGUF
    extraction); AWQ/GPTQ quantized SafeTensors containers tagged with
    ``quant_format`` metadata.
+- **Catalyst**: PyTorch checkpoint ingestion (``.pt``/``.pth`` torch.save zip
+  format): STORED-only zip reader plus a restricted pickle-stack interpreter
+  for ``data.pkl`` (whitelisted REDUCE targets, storage persistent-IDs);
+  nested state-dicts flatten to dotted IR names.
+- **Catalyst**: Keras v3 ``.keras`` archive ingestion: ``config.json``
+  signature detection, per-saveable ``states.npz`` weight stores read via a
+  native NPY parser (C-order, little-endian dtypes); legacy HDF5 weights
+  surface as structured unsupported errors.
+- **TPT-UIR adapter** (`tpt-crucible-uir-adapter`, new crate): lossless
+  TPT-IR `Graph` <-> Crucible-dialect `Region` conversion (~27
+  `tpt_crucible.*` compute ops; constant tensors embedded as
+  `AttributeValue::Bytes`; graph name/metadata carried by a trailing
+  `graph_info` op); wired into the CLI via `tpt ingest --uir <file>`, which
+  emits postcard-encoded regions consumable by `tpt-uir-cli`.
 - **Catalyst**: `tpt-doctor` toolchain verifier scanning python/esptool/yosys/
   nextpnr/kicad-cli.
 - **Alloy**: topology auto-discovery from node-reported latency/bandwidth

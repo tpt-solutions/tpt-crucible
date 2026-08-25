@@ -32,14 +32,14 @@ broken down per-crate using the key features from `spec2.txt` section 3.
 - [x] GGUF ingestion (native v2/v3 parser: metadata tree, tensor directory,
       legacy block-quant dtypes; candle-core integration optional/later)
 - [x] ONNX ingestion (native protobuf reader; core-op subset: MatMul/Gemm/elementwise/Softmax/LayerNorm/Reshape/Transpose/Concat/Cast/Gather)
-- [ ] PyTorch ingestion
+- [x] PyTorch ingestion (torch.save zip format: STORED-member zip reader + restricted pickle VM over data.pkl; deflated/legacy-tar/non-contiguous surface clear errors)
 - [ ] TensorFlow SavedModel ingestion
 - [ ] TFLite ingestion
 - [x] AWQ/GPTQ ingestion (SafeTensors containers + quant-name tagging; dequant kernels pending)
 - [ ] EXL2 ingestion
 - [ ] JAX/Flax ingestion
 - [x] Llamafile ingestion (embedded-GGUF extraction feeding the native GGUF parser)
-- [ ] Keras ingestion
+- [x] Keras ingestion (Keras v3 `.keras` zip archives: config.json signature check, nested `states.npz` stores via native NPY parser; legacy `.h5` rejected with guidance)
 - [ ] HuggingFace Hub fetch integration (format layer recognizes HF artifacts; network fetch pending)
 - [ ] Operator fusion via `egg` e-graphs
 - [ ] Quantization auto-search (`--accuracy-budget` flag; INT4 with INT8 promotion on fragile layers, validated against SiL pass / `.tptprofile` sensitivity data)
@@ -47,6 +47,34 @@ broken down per-crate using the key features from `spec2.txt` section 3.
 - [x] `tpt-doctor` toolchain verifier subcommand (scans external tools, checks versions, runs smoke test)
 - [ ] Custom MLIR dialect for TPT-IR (`mlir-sys` / `llvm-sys`)
 - [x] TPT-IR output serializable to JSON/Binary
+
+### tpt-crucible-uir-adapter (TPT-UIR compatibility)
+
+- [x] `Graph` -> `Region` conversion (Crucible dialect, single block, no
+      block arguments — inputs modeled as `tpt_crucible.input` ops so node
+      names survive the round trip)
+- [x] `Region` -> `Graph` conversion (inverse; round-trip tested against a
+      Llama-block-shaped graph)
+- [x] Crucible dialect extended in `tpt-uir` with ~27 `tpt_crucible.*`
+      compute op names (matmul/attention/rms_norm/softmax/rope/etc.),
+      previously only had the 3 hardware-placement ops
+      (`map_flash`/`route_fpga`/`analog_conv`)
+- [x] `AttributeValue::Bytes` added to `tpt-uir-core` for embedded constant
+      tensors (postcard + hand-extended FlatBuffers union support)
+- [x] `ScalarType::Q5_0`/`Q5_1` added to `tpt-uir-core` to match TPT-IR's
+      `DType` (postcard, text, FlatBuffers)
+- [ ] `tpt-uir-text`'s parser doesn't yet round-trip `bytes<...>` attributes
+      (printer support added; parsing back not implemented — postcard is the
+      adapter's serialization target, so this hasn't blocked anything yet)
+- [x] Wire `tpt-crucible-catalyst` output through the adapter +
+      `tpt-uir-serde`: `tpt ingest --uir <file>` emits a postcard-encoded
+      Crucible-dialect region alongside the `.tptir`; end-to-end round trip
+      covered by an integration test ingesting a synthetic GGUF v3 fixture
+      (`crates/tpt-crucible-uir-adapter/tests/ingest_roundtrip.rs`), and the
+      emitted artifact was validated live with `tpt-uir-cli validate --dialect crucible`
+- [ ] `tpt-uir` is currently a sibling-checkout path dependency
+      (`../../../tpt-uir/crates/...`); revisit once/if `tpt-uir` publishes to
+      crates.io
 
 ### tpt-crucible-alloy
 
@@ -66,6 +94,14 @@ broken down per-crate using the key features from `spec2.txt` section 3.
 - [x] Heartbeat protocol implementation
 - [x] Wasm compilation target (`wasm32-unknown-unknown`) for the browser SiL demo
       (`cargo check --target wasm32-unknown-unknown` passes for common+alloy)
+- [x] Hybrid silicon+FPGA node representation (`topology::FpgaProfile`,
+      `SwarmNode.fpga`) — descriptive metadata only; not yet read by the
+      partitioner or firmware generator
+- [ ] FPGA-aware partitioning: let `partition::partition` weigh/offload work
+      onto a node's `FpgaProfile` instead of treating it as plain memory
+- [ ] Runtime-adaptive capability: let a hybrid node's reported capability
+      change after (re)configuring its FPGA, instead of the static
+      `SwarmNode` fields assigned once at topology build time
 
 ### tpt-crucible-cli
 
@@ -86,9 +122,9 @@ broken down per-crate using the key features from `spec2.txt` section 3.
 - [ ] LiteX/LiteDRAM integration via generated Verilog wrappers
 - [ ] Output: synthesizable RTL, memory initialization files, `.fusecfg` overlay configuration files
 - [ ] **Milestone:** Select a Xilinx Alveo FPGA board, output a ready-to-flash bitstream using HBM
-- [ ] Hybrid silicon+FPGA boards: FPGA-aware partitioning in `alloy` and the
-      `alloy`<->`fusion` bridge, once `fusion::compile` is real. Node capability
-      is already representable via `tpt_crucible_alloy::topology::FpgaProfile`.
+- [ ] `alloy`<->`fusion` bridge for hybrid boards: `fusion::compile` targets
+      `tpt_crucible_alloy::topology::FpgaProfile` as its output contract, once
+      it's more than a stub (see matching items under `tpt-crucible-alloy`)
 
 ## Phase 3: The Physics Engine (Year 2)
 

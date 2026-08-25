@@ -28,6 +28,9 @@ tpt-crucible-common = { workspace = true }
 tpt-crucible-catalyst = { workspace = true }
 tpt-crucible-alloy = { workspace = true, optional = true }
 tpt-crucible-fusion = { workspace = true, optional = true }
+tpt-crucible-uir-adapter = { workspace = true }
+# Sibling checkout until `tpt-uir` publishes to crates.io (see todo.md).
+tpt-uir-serde = { path = "../../../tpt-uir/crates/tpt-uir-serde", features = ["std"] }
 clap = { workspace = true }
 
 [lints]

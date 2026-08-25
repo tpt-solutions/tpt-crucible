@@ -18,6 +18,7 @@ tpt-crucible-alloy = { path = "crates/tpt-crucible-alloy" }
 tpt-crucible-fusion = { path = "crates/tpt-crucible-fusion" }
 tpt-crucible-element = { path = "crates/tpt-crucible-element" }
 tpt-crucible-observer = { path = "crates/tpt-crucible-observer" }
+tpt-crucible-uir-adapter = { path = "crates/tpt-crucible-uir-adapter" }
 
 # Serialization (pure Rust, wasm-compatible).
 serde = { version = "1.0", features = ["derive"] }

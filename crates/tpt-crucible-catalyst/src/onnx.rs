@@ -23,85 +23,11 @@ use tpt_crucible_common::ops::{LayerNormAttrs, Op, ReshapeAttrs, SoftmaxAttrs, T
 use tpt_crucible_common::{Graph, Tensor, TensorData, TensorDesc};
 
 // ---- miniature protobuf wire-format decoder -------------------------------
+//
+// Shared with `tensorflow.rs` (`crate::pb`); this module binds it to ONNX's
+// `<onnx>` diagnostic context.
 
-/// Cursor over a protobuf message.
-struct Rd<'a> {
-    b: &'a [u8],
-    p: usize,
-}
-
-impl<'a> Rd<'a> {
-    fn new(b: &'a [u8]) -> Self {
-        Self { b, p: 0 }
-    }
-
-    fn eof(&self) -> bool {
-        self.p >= self.b.len()
-    }
-
-    fn varint(&mut self) -> Result<u64> {
-        let mut v = 0u64;
-        let mut shift = 0;
-        loop {
-            if self.p >= self.b.len() {
-                return Err(malformed("truncated varint"));
-            }
-            let byte = self.b[self.p];
-            self.p += 1;
-            v |= ((byte & 0x7f) as u64) << shift;
-            if byte & 0x80 == 0 {
-                return Ok(v);
-            }
-            shift += 7;
-            if shift >= 70 {
-                return Err(malformed("varint longer than 10 bytes"));
-            }
-        }
-    }
-
-    fn take(&mut self, n: usize) -> Result<&'a [u8]> {
-        let end = self
-            .p
-            .checked_add(n)
-            .ok_or_else(|| malformed("length overflow"))?;
-        if end > self.b.len() {
-            return Err(malformed("truncated field"));
-        }
-        let s = &self.b[self.p..end];
-        self.p = end;
-        Ok(s)
-    }
-
-    /// Length-delimited payload (wire type 2).
-    fn bytes(&mut self) -> Result<&'a [u8]> {
-        let len = self.varint()? as usize;
-        self.take(len)
-    }
-
-    fn fixed32(&mut self) -> Result<f32> {
-        let b = self.take(4)?;
-        Ok(f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-    }
-
-    fn skip(&mut self, wt: u8) -> Result<()> {
-        match wt {
-            0 => {
-                self.varint()?;
-            }
-            1 => {
-                self.take(8)?;
-            }
-            2 => {
-                self.bytes()?;
-            }
-            5 => {
-                self.take(4)?;
-            }
-            other => return Err(malformed(&format!("unsupported wire type {other}"))),
-        }
-        Ok(())
-    }
-}
+use crate::pb::{repeated_f32, repeated_i64, str_field, Rd};
 
 fn malformed(reason: &str) -> Error {
     Error::ParseFormat {
@@ -114,61 +40,11 @@ fn malformed(reason: &str) -> Error {
 /// Walk every field of a protobuf message, dispatching on `(field, wire_type)`.
 ///
 /// Handlers consume their own payloads from the cursor.
-fn for_fields<F>(buf: &[u8], mut on: F) -> Result<()>
+fn for_fields<F>(buf: &[u8], on: F) -> Result<()>
 where
     F: FnMut(u32, u8, &mut Rd) -> Result<()>,
 {
-    let mut r = Rd::new(buf);
-    while !r.eof() {
-        let key = r.varint()?;
-        let field = (key >> 3) as u32;
-        let wt = (key & 7) as u8;
-        if field == 0 {
-            return Err(malformed("field number 0 is reserved"));
-        }
-        on(field, wt, &mut r)?;
-    }
-    Ok(())
-}
-
-/// Read a `string`/`bytes` field (wire type 2).
-fn str_field(r: &mut Rd) -> Result<String> {
-    let b = r.bytes()?;
-    String::from_utf8(b.to_vec()).map_err(|_| malformed("field is not valid utf-8"))
-}
-
-/// Read a packed-or-unpacked `repeated int64` field.
-fn repeated_i64(wt: u8, r: &mut Rd, out: &mut Vec<i64>) -> Result<()> {
-    match wt {
-        2 => {
-            let b = r.bytes()?;
-            let mut inner = Rd::new(b);
-            while !inner.eof() {
-                out.push(inner.varint()? as i64);
-            }
-        }
-        0 => out.push(r.varint()? as i64),
-        _ => return Err(malformed("bad wire type for int64 field")),
-    }
-    Ok(())
-}
-
-/// Read a packed-or-unpacked `repeated float` field.
-fn repeated_f32(wt: u8, r: &mut Rd, out: &mut Vec<f32>) -> Result<()> {
-    match wt {
-        2 => {
-            let b = r.bytes()?;
-            if b.len() % 4 != 0 {
-                return Err(malformed("packed float length not a multiple of 4"));
-            }
-            for c in b.chunks_exact(4) {
-                out.push(f32::from_le_bytes([c[0], c[1], c[2], c[3]]));
-            }
-        }
-        5 => out.push(r.fixed32()?),
-        _ => return Err(malformed("bad wire type for float field")),
-    }
-    Ok(())
+    crate::pb::for_fields(buf, "<onnx>", "onnx", on)
 }
 
 // ---- ONNX message model ----------------------------------------------------

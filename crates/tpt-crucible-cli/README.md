@@ -10,8 +10,9 @@ cargo install tpt-crucible-cli --features fpga,swarm
 
 Subcommands:
 
-* `tpt ingest <model> [-o out] [--format gguf|safetensors]` - lower a model to
-  TPT-IR
+* `tpt ingest <model> [-o out] [--format gguf|safetensors] [--uir out.tptuir]`
+  - lower a model to TPT-IR (`--uir` additionally writes a postcard-encoded
+  TPT-UIR Crucible-dialect region consumable by the external `tpt-uir` tools)
 * `tpt info <ir> [--dot]` - inspect an IR artifact
 * `tpt compile <ir> --target alloy|fusion|element` - compile for hardware
   (`--nodes`, `--mem-mb`, `--seq-len`, `--out-dir` control the alloy swarm

@@ -18,6 +18,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use tpt_crucible_catalyst as catalyst;
 use tpt_crucible_common as common;
 use tpt_crucible_common::{Error, Graph};
+use tpt_crucible_uir_adapter as uir_adapter;
 
 #[cfg(feature = "swarm")]
 use tpt_crucible_alloy as alloy;
@@ -42,6 +43,10 @@ enum FormatArg {
     Gguf,
     /// Open Neural Network Exchange `.onnx`.
     Onnx,
+    /// PyTorch `.pt` / `.pth` (torch.save zip format).
+    Pytorch,
+    /// Keras v3 `.keras` archive.
+    Keras,
     /// Llamafile executable with embedded GGUF.
     Llamafile,
     /// AWQ quantized SafeTensors checkpoint.
@@ -56,6 +61,8 @@ impl From<FormatArg> for catalyst::ModelFormat {
             FormatArg::Safetensors => catalyst::ModelFormat::SafeTensors,
             FormatArg::Gguf => catalyst::ModelFormat::Gguf,
             FormatArg::Onnx => catalyst::ModelFormat::Onnx,
+            FormatArg::Pytorch => catalyst::ModelFormat::PyTorch,
+            FormatArg::Keras => catalyst::ModelFormat::Keras,
             FormatArg::Llamafile => catalyst::ModelFormat::Llamafile,
             FormatArg::Awq => catalyst::ModelFormat::Awq,
             FormatArg::Gptq => catalyst::ModelFormat::Gptq,
@@ -87,6 +94,10 @@ enum Command {
         /// Output artifact; defaults to `<stem>.tptir` (binary).
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Also emit a TPT-UIR Crucible-dialect region to this path
+        /// (postcard-encoded `.tptuir`, readable by `tpt-uir-cli`).
+        #[arg(long)]
+        uir: Option<PathBuf>,
     },
     /// Inspect a TPT-IR artifact.
     Info {
@@ -142,7 +153,13 @@ fn run() -> Result<i32, Error> {
             model,
             format,
             output,
-        } => cmd_ingest(&model, format.map(Into::into), output.as_deref()),
+            uir,
+        } => cmd_ingest(
+            &model,
+            format.map(Into::into),
+            output.as_deref(),
+            uir.as_deref(),
+        ),
         Command::Info { ir, dot } => cmd_info(&ir, dot),
         Command::Compile {
             ir,
@@ -181,6 +198,7 @@ fn cmd_ingest(
     model: &Path,
     format: Option<catalyst::ModelFormat>,
     output: Option<&Path>,
+    uir_out: Option<&Path>,
 ) -> Result<i32, Error> {
     let graph = match format {
         Some(f) => catalyst::ingest_with_format(model, f)?,
@@ -196,12 +214,32 @@ fn cmd_ingest(
     }
     graph.save(&out)?;
 
+    // Optional TPT-UIR sidecar: adapt the graph to a Crucible-dialect region
+    // and write it postcard-encoded for the external tpt-uir toolchain.
+    let mut region_ops: Option<usize> = None;
+    if let Some(uir_path) = uir_out {
+        let region = uir_adapter::graph_to_region(&graph);
+        region_ops = Some(region.blocks[0].operations.len());
+        let bytes = tpt_uir_serde::serialize_region(&region).map_err(|e| {
+            Error::InvalidArgument(format!("tpt-uir postcard encoding failed: {e}"))
+        })?;
+        if let Some(parent) = uir_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        std::fs::write(uir_path, bytes)?;
+    }
+
     println!("ingested `{}` -> `{}`", model.display(), out.display());
     println!(
         "  {} nodes, format={}",
         graph.len(),
         graph.metadata("source_format").unwrap_or("unknown")
     );
+    if let (Some(path), Some(ops)) = (uir_out, region_ops) {
+        println!("  tpt-uir   : {ops} ops -> `{}`", path.display());
+    }
     Ok(0)
 }
 

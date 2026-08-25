@@ -1,0 +1,28 @@
+[package]
+name = "tpt-crucible-uir-adapter"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Converts TPT-IR graphs (tpt-crucible-common::Graph) to and from TPT-UIR Crucible-dialect Regions"
+documentation = "https://docs.rs/tpt-crucible-uir-adapter"
+readme = "README.md"
+keywords = ["ai", "compiler", "ir", "mlir", "interop"]
+categories = ["compilers", "encoding"]
+
+[dependencies]
+tpt-crucible-common = { workspace = true }
+# Sibling checkout until `tpt-uir` publishes to crates.io (see todo.md).
+tpt-uir-core = { path = "../../../tpt-uir/crates/tpt-uir-core" }
+tpt-uir-dialects = { path = "../../../tpt-uir/crates/tpt-uir-dialects" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tpt-crucible-catalyst = { workspace = true }
+tpt-crucible-common = { workspace = true }
+tpt-uir-serde = { path = "../../../tpt-uir/crates/tpt-uir-serde", features = ["std"] }
+
+[lints]
+workspace = true

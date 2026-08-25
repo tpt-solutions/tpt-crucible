@@ -46,6 +46,30 @@ impl Ingestor for GgufIngestor {
     }
 }
 
+struct PyTorchIngestor;
+
+impl Ingestor for PyTorchIngestor {
+    fn format(&self) -> ModelFormat {
+        ModelFormat::PyTorch
+    }
+
+    fn ingest(&self, path: &Path) -> Result<Graph> {
+        crate::pytorch::ingest(path)
+    }
+}
+
+struct KerasIngestor;
+
+impl Ingestor for KerasIngestor {
+    fn format(&self) -> ModelFormat {
+        ModelFormat::Keras
+    }
+
+    fn ingest(&self, path: &Path) -> Result<Graph> {
+        crate::keras::ingest(path)
+    }
+}
+
 struct OnnxIngestor;
 
 impl Ingestor for OnnxIngestor {
@@ -96,7 +120,7 @@ impl Ingestor for GptqIngestor {
 
 /// Ingestor for a format, if Catalyst can read it today.
 ///
-/// Formats recognized but not yet implemented (PyTorch, TensorFlow,
+/// Formats recognized but not yet implemented (TensorFlow,
 /// TFLite, EXL2, JAX/Flax, Keras) return `None`; see `todo.md`
 /// Phase 1 for the roadmap.
 pub fn ingestor_for(format: ModelFormat) -> Option<Box<dyn Ingestor>> {
@@ -104,6 +128,8 @@ pub fn ingestor_for(format: ModelFormat) -> Option<Box<dyn Ingestor>> {
         ModelFormat::SafeTensors => Some(Box::new(SafeTensorsIngestor)),
         ModelFormat::Gguf => Some(Box::new(GgufIngestor)),
         ModelFormat::Onnx => Some(Box::new(OnnxIngestor)),
+        ModelFormat::PyTorch => Some(Box::new(PyTorchIngestor)),
+        ModelFormat::Keras => Some(Box::new(KerasIngestor)),
         ModelFormat::Llamafile => Some(Box::new(LlamafileIngestor)),
         ModelFormat::Awq => Some(Box::new(AwqIngestor)),
         ModelFormat::Gptq => Some(Box::new(GptqIngestor)),
@@ -119,6 +145,8 @@ pub fn is_supported(format: ModelFormat) -> bool {
             | ModelFormat::Gguf
             | ModelFormat::Onnx
             | ModelFormat::Llamafile
+            | ModelFormat::PyTorch
+            | ModelFormat::Keras
             | ModelFormat::Awq
             | ModelFormat::Gptq
     )
@@ -154,13 +182,14 @@ mod tests {
     fn unsupported_format_is_not_implemented() {
         let dir = std::env::temp_dir().join("catalyst-ingest-tests");
         std::fs::create_dir_all(&dir).unwrap();
-        let p = dir.join("weights.pt");
+        // EXL2 archives are recognized but not implemented yet.
+        let p = dir.join("weights.exl2");
         let mut f = std::fs::File::create(&p).unwrap();
-        f.write_all(b"\x80\x02pickle-payload").unwrap();
+        f.write_all(b"EXL2-junk").unwrap();
 
         let err = ingest_path(&p).unwrap_err();
         assert!(matches!(err, Error::NotImplemented { .. }));
-        assert!(err.to_string().contains("pytorch"));
+        assert!(err.to_string().contains("exl2"));
     }
 
     #[test]
