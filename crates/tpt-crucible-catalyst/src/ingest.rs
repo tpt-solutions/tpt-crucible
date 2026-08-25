@@ -82,6 +82,30 @@ impl Ingestor for OnnxIngestor {
     }
 }
 
+struct TensorFlowIngestor;
+
+impl Ingestor for TensorFlowIngestor {
+    fn format(&self) -> ModelFormat {
+        ModelFormat::TensorFlowSavedModel
+    }
+
+    fn ingest(&self, path: &Path) -> Result<Graph> {
+        crate::tensorflow::ingest(path)
+    }
+}
+
+struct TfliteIngestor;
+
+impl Ingestor for TfliteIngestor {
+    fn format(&self) -> ModelFormat {
+        ModelFormat::TensorFlowLite
+    }
+
+    fn ingest(&self, path: &Path) -> Result<Graph> {
+        crate::tflite::ingest(path)
+    }
+}
+
 struct LlamafileIngestor;
 
 impl Ingestor for LlamafileIngestor {
@@ -118,11 +142,32 @@ impl Ingestor for GptqIngestor {
     }
 }
 
-/// Ingestor for a format, if Catalyst can read it today.
-///
-/// Formats recognized but not yet implemented (TensorFlow,
-/// TFLite, EXL2, JAX/Flax, Keras) return `None`; see `todo.md`
-/// Phase 1 for the roadmap.
+struct Exl2Ingestor;
+
+impl Ingestor for Exl2Ingestor {
+    fn format(&self) -> ModelFormat {
+        ModelFormat::Exl2
+    }
+
+    fn ingest(&self, path: &Path) -> Result<Graph> {
+        crate::quant::ingest_exl2(path)
+    }
+}
+
+struct JaxFlaxIngestor;
+
+impl Ingestor for JaxFlaxIngestor {
+    fn format(&self) -> ModelFormat {
+        ModelFormat::JaxFlax
+    }
+
+    fn ingest(&self, path: &Path) -> Result<Graph> {
+        crate::flax::ingest(path)
+    }
+}
+
+/// Ingestor for a format. Every format [`ModelFormat`] names has a native
+/// ingestor today.
 pub fn ingestor_for(format: ModelFormat) -> Option<Box<dyn Ingestor>> {
     match format {
         ModelFormat::SafeTensors => Some(Box::new(SafeTensorsIngestor)),
@@ -133,7 +178,10 @@ pub fn ingestor_for(format: ModelFormat) -> Option<Box<dyn Ingestor>> {
         ModelFormat::Llamafile => Some(Box::new(LlamafileIngestor)),
         ModelFormat::Awq => Some(Box::new(AwqIngestor)),
         ModelFormat::Gptq => Some(Box::new(GptqIngestor)),
-        _ => None,
+        ModelFormat::Exl2 => Some(Box::new(Exl2Ingestor)),
+        ModelFormat::JaxFlax => Some(Box::new(JaxFlaxIngestor)),
+        ModelFormat::TensorFlowSavedModel => Some(Box::new(TensorFlowIngestor)),
+        ModelFormat::TensorFlowLite => Some(Box::new(TfliteIngestor)),
     }
 }
 
@@ -149,6 +197,10 @@ pub fn is_supported(format: ModelFormat) -> bool {
             | ModelFormat::Keras
             | ModelFormat::Awq
             | ModelFormat::Gptq
+            | ModelFormat::Exl2
+            | ModelFormat::JaxFlax
+            | ModelFormat::TensorFlowSavedModel
+            | ModelFormat::TensorFlowLite
     )
 }
 
@@ -176,20 +228,18 @@ mod tests {
     use super::*;
     use crate::safetensors;
     use std::collections::BTreeMap;
-    use std::io::Write as _;
 
     #[test]
-    fn unsupported_format_is_not_implemented() {
+    fn jax_flax_end_to_end_via_registry() {
         let dir = std::env::temp_dir().join("catalyst-ingest-tests");
         std::fs::create_dir_all(&dir).unwrap();
-        // EXL2 archives are recognized but not implemented yet.
-        let p = dir.join("weights.exl2");
-        let mut f = std::fs::File::create(&p).unwrap();
-        f.write_all(b"EXL2-junk").unwrap();
+        let p = dir.join("params.msgpack");
+        std::fs::write(&p, crate::flax::tests::fixture_bundle()).unwrap();
 
-        let err = ingest_path(&p).unwrap_err();
-        assert!(matches!(err, Error::NotImplemented { .. }));
-        assert!(err.to_string().contains("exl2"));
+        let g = ingest_path(&p).unwrap();
+        assert_eq!(g.metadata("source_format"), Some("jax-flax"));
+        g.validate().unwrap();
+        assert!(is_supported(ModelFormat::JaxFlax));
     }
 
     #[test]
@@ -221,6 +271,39 @@ mod tests {
         assert_eq!(g.metadata("source_format"), Some("onnx"));
         g.validate().unwrap();
         assert!(is_supported(ModelFormat::Onnx));
+    }
+
+    #[test]
+    fn tensorflow_savedmodel_end_to_end_via_registry() {
+        // Directory layout (saved_model.pb inside a folder), as exported by
+        // `tf.saved_model.save`.
+        let dir = std::env::temp_dir().join("catalyst-ingest-tests/savedmodel");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("saved_model.pb"),
+            crate::tensorflow::tests::fixture_serving_minimal(),
+        )
+        .unwrap();
+
+        let g = ingest_path(&dir).unwrap();
+        assert_eq!(g.metadata("source_format"), Some("tf-savedmodel"));
+        g.validate().unwrap();
+        assert_eq!(g.inputs.len(), 1);
+        assert_eq!(g.outputs.len(), 1);
+        assert!(is_supported(ModelFormat::TensorFlowSavedModel));
+    }
+
+    #[test]
+    fn tflite_end_to_end_via_registry() {
+        let dir = std::env::temp_dir().join("catalyst-ingest-tests");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("model.tflite");
+        std::fs::write(&p, crate::tflite::tests::fixture_fc_softmax()).unwrap();
+
+        let g = ingest_path(&p).unwrap();
+        assert_eq!(g.metadata("source_format"), Some("tflite"));
+        g.validate().unwrap();
+        assert!(is_supported(ModelFormat::TensorFlowLite));
     }
 
     #[test]

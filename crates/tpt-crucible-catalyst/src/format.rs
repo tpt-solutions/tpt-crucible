@@ -115,14 +115,38 @@ pub fn detect(path: &Path) -> Result<ModelFormat> {
 
 fn detect_directory(path: &Path) -> Result<ModelFormat> {
     if path.join("saved_model.pb").exists() {
-        Ok(ModelFormat::TensorFlowSavedModel)
-    } else if path.extension().and_then(|e| e.to_str()) == Some("exl2") {
-        Ok(ModelFormat::Exl2)
-    } else {
-        Err(Error::UnknownFormat {
-            path: path.display().to_string(),
-        })
+        return Ok(ModelFormat::TensorFlowSavedModel);
     }
+    // ExLlamaV2 HF-style directory: config.json declaring quant_method=exl2
+    // (cheap textual sniff; a full parse happens in the ingestor).
+    if path.join("config.json").is_file()
+        && std::fs::read_to_string(path.join("config.json"))
+            .map(|raw| raw.contains("exl2"))
+            .unwrap_or(false)
+    {
+        return Ok(ModelFormat::Exl2);
+    }
+    if path.extension().and_then(|e| e.to_str()) == Some("exl2") {
+        return Ok(ModelFormat::Exl2);
+    }
+    // Plain HuggingFace repo layout: config.json (optional) plus one or more
+    // `*.safetensors` shards.
+    let has_safetensors_shard = std::fs::read_dir(path)
+        .map(|entries| {
+            entries.filter_map(std::result::Result::ok).any(|e| {
+                e.path()
+                    .extension()
+                    .and_then(|x| x.to_str())
+                    .is_some_and(|x| x.eq_ignore_ascii_case("safetensors"))
+            })
+        })
+        .unwrap_or(false);
+    if has_safetensors_shard {
+        return Ok(ModelFormat::SafeTensors);
+    }
+    Err(Error::UnknownFormat {
+        path: path.display().to_string(),
+    })
 }
 
 fn detect_by_magic(path: &Path) -> Result<ModelFormat> {

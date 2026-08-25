@@ -360,6 +360,9 @@ fn compile_alloy(
         strategy: Some(alloy::partition::Strategy::Hybrid),
         max_weight_bytes_per_node: None,
         kv_request,
+        // Homogeneous ESP32 fleets carry no FPGA fabric; offload stays off
+        // until hybrid boards are expressible on the CLI.
+        fpga_offload: false,
     };
     let plan = alloy::partition::partition(g, &topo, &opts)?;
 

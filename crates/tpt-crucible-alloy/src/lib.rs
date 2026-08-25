@@ -5,10 +5,13 @@
 //!
 //! * [`topology`] — swarm description and latency-matrix auto-discovery.
 //! * [`partition`] — topology-aware partitioning with transformer-native
-//!   strategies (attention-head parallel + layer-serial hybrid).
+//!   strategies (attention-head parallel + layer-serial hybrid), FPGA-offload
+//!   placement for hybrid boards, and KV-cache-aware budgets.
 //! * [`kv_cache`] — KV-cache distribution that prevents OOMs on
 //!   memory-constrained nodes.
 //! * [`heartbeat`] — node liveness protocol codec + failure detector.
+//! * [`recovery`] — dead-node bypass: re-partitioning onto survivors when the
+//!   [`heartbeat::FailureDetector`] flags nodes gone.
 //! * [`firmware`] — per-node firmware projects and master flashing scripts.
 //!
 //! ## Example
@@ -36,6 +39,7 @@ pub mod firmware;
 pub mod heartbeat;
 pub mod kv_cache;
 pub mod partition;
+pub mod recovery;
 pub mod topology;
 
 /// Re-export of the shared IR crate for downstream convenience.

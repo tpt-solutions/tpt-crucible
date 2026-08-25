@@ -33,14 +33,36 @@ broken down per-crate using the key features from `spec2.txt` section 3.
       legacy block-quant dtypes; candle-core integration optional/later)
 - [x] ONNX ingestion (native protobuf reader; core-op subset: MatMul/Gemm/elementwise/Softmax/LayerNorm/Reshape/Transpose/Concat/Cast/Gather)
 - [x] PyTorch ingestion (torch.save zip format: STORED-member zip reader + restricted pickle VM over data.pkl; deflated/legacy-tar/non-contiguous surface clear errors)
-- [ ] TensorFlow SavedModel ingestion
-- [ ] TFLite ingestion
+- [x] TensorFlow SavedModel ingestion (frozen-graph `saved_model.pb`: native
+      protobuf reader over the shared `pb` decoder; Placeholder/Const/Identity,
+      MatMul/BatchMatMul (transpose attrs → Transpose), elementwise binaries +
+      unaries, Softmax/Reshape/Transpose/Concat/Cast; outputs from
+      `signature_def` (preferring `serving_default`) else dangling producers;
+      checkpoint-variable graphs rejected with frozen-graph guidance)
+- [x] TFLite ingestion (native read-only FlatBuffers cursor `flatbuf.rs`;
+      first subgraph of the "TFL3" model: FULLY_CONNECTED → weight-transpose +
+      MatMul (+bias), BATCH_MATMUL with adjoints, ADD/SUB/MUL/DIV,
+      CONCATENATION/RESHAPE/TRANSPOSE/CAST, SOFTMAX/LOGISTIC/TANH/RELU +
+      unaries; fused RELU/TANH expanded, others rejected; CUSTOM ops named;
+      quantized tensors ingested at stored dtype)
 - [x] AWQ/GPTQ ingestion (SafeTensors containers + quant-name tagging; dequant kernels pending)
-- [ ] EXL2 ingestion
-- [ ] JAX/Flax ingestion
+- [x] EXL2 ingestion (HF-style dirs via config.json `quant_method=exl2` sniff
+      or `.q_weight` tensor markers; multi-shard SafeTensors merge into one
+      weight-only graph; tagged `quant_format=exl2`, `quant_bits` from the
+      config's average bitrate else `mixed`; dequant kernels pending)
+- [x] JAX/Flax ingestion (native msgpack decoder `msgpack.rs`; Flax pytrees
+      via `flax.rs`: ndarray ext-1 leaves decode `[shape, numpy-dtype-name,
+      row-major bytes]` incl. bfloat16, ext-3 scalars, bin leaves as U8,
+      `__msgpack_chunked_array__` wrappers concatenated; weight-only graph
+      named by dotted tree paths; complex dtypes rejected)
 - [x] Llamafile ingestion (embedded-GGUF extraction feeding the native GGUF parser)
 - [x] Keras ingestion (Keras v3 `.keras` zip archives: config.json signature check, nested `states.npz` stores via native NPY parser; legacy `.h5` rejected with guidance)
-- [ ] HuggingFace Hub fetch integration (format layer recognizes HF artifacts; network fetch pending)
+- [x] HuggingFace directory-layout ingestion (`tpt ingest <hf-repo-dir>/`:
+      config.json + `*.safetensors` shards detected as SafeTensors and merged
+      into one weight-only graph, duplicate tensor names rejected across
+      shards; EXL2 dirs keep their dedicated detection/ingestor)
+- [ ] HuggingFace Hub network fetch (download a repo id into the local cache;
+      needs an HTTP client dependency — deferred)
 - [ ] Operator fusion via `egg` e-graphs
 - [ ] Quantization auto-search (`--accuracy-budget` flag; INT4 with INT8 promotion on fragile layers, validated against SiL pass / `.tptprofile` sensitivity data)
 - [ ] Streaming pre-flight: operator compatibility analysis streamed to Observer over WebSockets
@@ -85,8 +107,13 @@ broken down per-crate using the key features from `spec2.txt` section 3.
       (v1 emits head-slice groups per attention op; graph-level head split lands with the executor)
 - [x] KV cache distribution across nodes (prevents OOM on memory-constrained nodes;
       plans fail loudly naming the tight node)
-- [ ] Fault-tolerant execution: node heartbeats, dead-node bypass
-      (heartbeat codec + failure detector done; execution engine pending)
+- [x] Dead-node bypass (`recovery::bypass_dead_nodes`: prunes dead topology
+      ids, re-slices the latency/bandwidth matrices over survivors, re-runs
+      the planner, and reports displaced IR nodes plus a new→old survivor
+      map; composes with `FailureDetector` output, tolerates duplicate/
+      out-of-range ids, rejects all-dead fleets)
+- [ ] Runtime execution engine (distributes shards, drives heartbeats,
+      triggers recovery on failure)
 - [ ] Rolling pipeline parallelism (eliminates inference stalls)
 - [x] Node-specific firmware generation via `askama` templating (Rust/C++, memory-safe)
       (string-built templates today; askama migration pending)
@@ -97,11 +124,15 @@ broken down per-crate using the key features from `spec2.txt` section 3.
 - [x] Hybrid silicon+FPGA node representation (`topology::FpgaProfile`,
       `SwarmNode.fpga`) — descriptive metadata only; not yet read by the
       partitioner or firmware generator
-- [ ] FPGA-aware partitioning: let `partition::partition` weigh/offload work
-      onto a node's `FpgaProfile` instead of treating it as plain memory
-- [ ] Runtime-adaptive capability: let a hybrid node's reported capability
-      change after (re)configuring its FPGA, instead of the static
-      `SwarmNode` fields assigned once at topology build time
+- [x] FPGA-aware partitioning (`PartitionOptions::fpga_offload`: GEMM-class
+      segments — MatMul/Attention — prefer opening on hybrid boards whose
+      fabric can stage the segment's weights in block RAM; shards report
+      `fpga_ops`/`fpga_offload()`, stats count routed ops; silicon fallback
+      when the BRAM cannot fit; default off keeps placement unchanged)
+- [x] Runtime-adaptive capability (`SwarmNode::report_fpga` /
+      `Topology::report_fpga`: hybrid boards re-report their `FpgaProfile`
+      after an overlay load/teardown and the next partition run plans against
+      the new block-RAM capability — covered by a fallback→offload→revert test)
 
 ### tpt-crucible-cli
 
@@ -145,7 +176,12 @@ broken down per-crate using the key features from `spec2.txt` section 3.
 
 - [x] Unified telemetry schema: tokens/sec, memory bandwidth, thermal drift, node latency
       (`TelemetryEvent` defined so other crates can emit against it early)
-- [ ] `axum` + `tokio-tungstenite` WebSocket telemetry backend
+- [x] `axum` + `tokio-tungstenite` WebSocket telemetry backend
+      (`TelemetryServer::bind("ip:port")` spawns the axum app; emitters push
+      `TelemetryEvent`s via `emit`, fanned out through a broadcast channel to
+      every connected `/ws` client as JSON text frames — lagging clients get
+      a `{"lagged":n}` note instead of stalling the swarm; in-process taps via
+      `subscribe()`)
 
 ### tpt-crucible-observer-web (8th workspace crate, pure Rust frontend)
 
@@ -166,8 +202,15 @@ broken down per-crate using the key features from `spec2.txt` section 3.
 
 - [x] Per-crate `description`/`keywords`/`categories` finalized
 - [x] Per-crate `README.md` written (crates.io renders these)
-- [ ] docs.rs builds cleanly for every crate (check feature-gated code paths)
-- [ ] Semver policy documented; 0.1.0 -> 1.0.0 criteria defined
+- [x] docs.rs builds cleanly for every crate (verified locally: `cargo doc
+      --workspace --no-deps` is warning-free, including the `fpga,swarm`
+      feature-gated code paths; re-check on real docs.rs once the first
+      crate is published)
+- [x] Semver policy documented; 0.1.0 → 1.0.0 criteria defined
+      ([`VERSIONING.md`](VERSIONING.md): 0.x breakage = minor bump, data-format
+      stability contract for TPT-IR JSON/binary + heartbeat frames, additive-
+      only enum growth, two clean 0.y releases + real usage to graduate,
+      MSRV/deprecation/yanking rules)
 - [ ] Publish order respected: `common` -> `catalyst` -> {`fusion`, `element`, `alloy`} -> `cli`; `observer` and `observer-web` optional
       (publish workflow encodes this order; needs a real registry run to verify)
 - [ ] Decide whether `tpt-crucible-observer-web` is published to crates.io at all (frontend wasm binaries are unusual crates.io citizens) or just built/deployed from the workspace without publishing

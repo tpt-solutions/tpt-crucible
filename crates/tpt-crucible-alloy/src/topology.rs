@@ -46,9 +46,13 @@ impl NodeArch {
 /// are orthogonal, so this is a field on [`SwarmNode`] rather than a new
 /// [`NodeArch`] variant.
 ///
-/// This is descriptive metadata only today — no partitioning or firmware
-/// logic reads it yet. It exists so `tpt-crucible-fusion` has a named shape
-/// to target once it compiles real overlays (see its module docs).
+/// The partitioner reads `block_ram_bytes` when
+/// [`PartitionOptions::fpga_offload`](crate::partition::PartitionOptions::fpga_offload)
+/// is set: GEMM-class segments prefer
+/// landing on boards whose fabric can stage the shard's weights, and such
+/// shards record the fabric-routed ops. `luts`/`dsp_slices` remain
+/// descriptive for now — firmware generation and `tpt-crucible-fusion`
+/// overlays target them once real overlay compilation lands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FpgaProfile {
     /// Available look-up tables.
@@ -101,6 +105,16 @@ impl SwarmNode {
             memory_bytes,
             fpga: Some(fpga),
         }
+    }
+
+    /// Fold a freshly reported fabric profile into this node.
+    ///
+    /// Hybrid boards are runtime-adaptive: loading or tearing down an overlay
+    /// changes how much block RAM the fabric can offer, so the node re-reports
+    /// [`FpgaProfile`] and subsequent partition runs see the new capability
+    /// (see [`crate::partition::PartitionOptions::fpga_offload`]).
+    pub fn report_fpga(&mut self, profile: Option<FpgaProfile>) {
+        self.fpga = profile;
     }
 }
 
@@ -181,6 +195,29 @@ impl Topology {
             }
         }
         Self::from_parts(nodes, latency, bandwidth).expect("homogeneous matrices are well-formed")
+    }
+
+    /// Fold a node's freshly reported fabric profile into the topology.
+    ///
+    /// Runtime-adaptive capability: after an overlay load/teardown the node
+    /// re-reports its [`FpgaProfile`]; the next
+    /// [`crate::partition::partition`] run plans against the new numbers.
+    ///
+    /// # Errors
+    /// `tpt_crucible_common::Error::InvalidArgument` when `node` is out of range.
+    pub fn report_fpga(
+        &mut self,
+        node: usize,
+        profile: Option<FpgaProfile>,
+    ) -> tpt_crucible_common::Result<()> {
+        let node_count = self.nodes.len();
+        let n = self.nodes.get_mut(node).ok_or_else(|| {
+            tpt_crucible_common::Error::InvalidArgument(format!(
+                "node index {node} out of range (topology has {node_count} nodes)"
+            ))
+        })?;
+        n.report_fpga(profile);
+        Ok(())
     }
 
     /// Estimated transfer+latency cost in seconds for `bytes` between nodes.

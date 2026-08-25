@@ -9,10 +9,16 @@
 //!
 //! * [`format::ModelFormat`] — identifies all 12 target container formats.
 //! * [`ingest`] - dispatches to format ingestors. Native parsers:
-//!   **SafeTensors**, **GGUF (v2/v3)**, **ONNX** (core-op subset),
+//!   **SafeTensors** (single files and HuggingFace multi-shard directories),
+//!   **GGUF (v2/v3)**, **ONNX** (core-op subset),
 //!   **PyTorch** (torch.save zip format via a restricted pickle VM),
-//!   **Keras v3** (.keras archives), **Keras v3** (.keras archives via a native NPY parser), **Llamafile** (embedded-GGUF extraction), and **AWQ/GPTQ**
-//!   (quantized SafeTensors containers tagged with `quant_format` metadata).
+//!   **Keras v3** (.keras archives), **TensorFlow SavedModel** (frozen-graph
+//!   `saved_model.pb` via a native protobuf reader), **TFLite** (`.tflite`
+//!   flatbuffers via a hand-rolled reader; core-op subset), **Llamafile**
+//!   (embedded-GGUF extraction), **AWQ/GPTQ/EXL2** (quantized checkpoints
+//!   tagged with `quant_format` metadata; EXL2 directories with shard
+//!   merging) and **JAX/Flax** (msgpack parameter pytrees via a native
+//!   decoder).
 //! * [`doctor`] - `tpt-doctor` toolchain verifier.
 //!
 //! ```no_run
@@ -25,26 +31,29 @@
 //!
 //! ## Roadmap (tracked in todo.md)
 //!
-//! TensorFlow SavedModel/TFLite/EXL2/JAX/legacy-H5 ingestion, egg-based operator
-//! fusion, quantization auto-search against an accuracy budget, streaming
-//! pre-flight over WebSockets, and a custom MLIR dialect.
+//! Egg-based operator fusion, quantization auto-search against an accuracy
+//! budget, streaming pre-flight over WebSockets, and a custom MLIR dialect.
 
 pub mod doctor;
+pub mod flatbuf;
+pub mod flax;
 pub mod format;
 pub mod gguf;
 pub mod ingest;
 pub mod keras;
 pub mod llamafile;
+pub mod msgpack;
 pub mod npy;
+pub mod onnx;
 /// Shared protobuf wire-format reader (used by ONNX + TF SavedModel).
 pub(crate) mod pb;
-pub mod onnx;
 pub mod pickle;
 pub mod pkzip;
 pub mod pytorch;
 pub mod quant;
 pub mod safetensors;
 pub mod tensorflow;
+pub mod tflite;
 
 pub use format::ModelFormat;
 pub use ingest::{ingest_path, ingest_with_format, Ingestor};

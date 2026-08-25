@@ -11,7 +11,11 @@
 //! * under [`Strategy::HeadParallel`] / [`Strategy::Hybrid`], every
 //!   [`Op::Attention`] gets a [`HeadParallelGroup`] that spreads query heads
 //!   across the fleet while FFN sublayers stay layer-serial — the
-//!   transformer-native split from spec2.txt differentiator #5.
+//!   transformer-native split from spec2.txt differentiator #5;
+//! * with [`PartitionOptions::fpga_offload`], hybrid nodes' fabrics are read
+//!   by the planner: GEMM-class segments ([`Op::MatMul`] / [`Op::Attention`])
+//!   prefer landing on a board whose fabric can stage the shard's weights in
+//!   block RAM, and such shards record which ops route to the overlay.
 
 use std::collections::BTreeMap;
 
@@ -45,6 +49,14 @@ pub struct PartitionOptions {
     pub max_weight_bytes_per_node: Option<u64>,
     /// When set, reserve this much cache per node before partitioning.
     pub kv_request: Option<KvCacheRequest>,
+    /// Route GEMM-class ops on hybrid boards through their FPGA fabric.
+    ///
+    /// When enabled, a segment containing [`Op::MatMul`] or [`Op::Attention`]
+    /// prefers opening on a node whose [`crate::topology::FpgaProfile`] has
+    /// enough block RAM to stage the segment's weights; such shards report
+    /// [`Shard::fpga_offload`] and name the fabric-routed ops. Pure-silicon
+    /// execution remains the fallback whenever the fabric cannot fit.
+    pub fpga_offload: bool,
 }
 
 /// A group of swarm nodes jointly executing one attention op,
@@ -68,6 +80,17 @@ pub struct Shard {
     pub weight_bytes: u64,
     /// KV-cache bytes reserved here (0 when no kv request was given).
     pub kv_cache_bytes: u64,
+    /// GEMM-class ops of this shard routed through the node's FPGA fabric
+    /// (empty unless [`PartitionOptions::fpga_offload`] was set and the
+    /// fabric fits the shard's weights in block RAM).
+    pub fpga_ops: Vec<NodeId>,
+}
+
+impl Shard {
+    /// True when part of this shard executes on the node's FPGA fabric.
+    pub fn fpga_offload(&self) -> bool {
+        !self.fpga_ops.is_empty()
+    }
 }
 
 /// Coarse quality metrics of a plan.
@@ -79,6 +102,9 @@ pub struct PlanStats {
     pub weight_bytes_total: u64,
     /// Largest shard weight footprint (capacity-planning headline).
     pub max_shard_weight_bytes: u64,
+    /// GEMM-class ops routed through an FPGA fabric (0 unless
+    /// [`PartitionOptions::fpga_offload`] was set).
+    pub fpga_offload_ops: u64,
 }
 
 /// The complete assignment produced by [`partition`].
@@ -188,10 +214,16 @@ pub fn partition(
         swarm_node: usize,
         bytes: u64,
         nodes: Vec<NodeId>,
+        /// Ops of this shard routed through the node's FPGA fabric.
+        fpga_ops: Vec<NodeId>,
     }
     let mut shards: Vec<ShardAcc> = Vec::new();
     let mut assignment: Vec<Option<usize>> = vec![None; graph.len()];
     let mut current: Option<usize> = None;
+
+    // GEMM-class ops are the ones an FPGA overlay accelerates.
+    let is_gemm_class = |op: &Op| matches!(op, Op::MatMul | Op::Attention { .. });
+    let mut current_fabric = false;
 
     for (i, n) in graph.nodes.iter().enumerate() {
         if matches!(n.op, Op::Constant { .. }) {
@@ -208,8 +240,43 @@ pub fn partition(
         let pos = if stay_feasible {
             current.unwrap()
         } else {
-            // Open a shard on the fleet node with the most headroom left.
-            let mut best: Option<(usize, u64)> = None;
+            // Decide FPGA routing for the *segment* about to open. Its first
+            // op is often an Input (zero bytes, non-GEMM), so scan forward
+            // through the ops that will share this shard (up to the largest
+            // node budget) looking for GEMM-class work; the fabric must be
+            // able to stage the weights accumulated through that op.
+            let global_max_budget = (0..topology.nodes.len())
+                .map(&budget_for)
+                .max()
+                .unwrap_or(0);
+            let mut gemm_segment = false;
+            let mut segment_bram = 0u64;
+            if options.fpga_offload {
+                let mut acc = 0u64;
+                for (idx, n2) in graph.nodes.iter().enumerate().skip(i) {
+                    if matches!(
+                        n2.op,
+                        Op::Constant { .. } | Op::Input(_) | Op::Output { .. }
+                    ) {
+                        continue;
+                    }
+                    acc += op_bytes[idx];
+                    if is_gemm_class(&n2.op) {
+                        segment_bram = acc;
+                        gemm_segment = true;
+                        break;
+                    }
+                    if acc > global_max_budget {
+                        break;
+                    }
+                }
+            }
+
+            // Open a shard on the best feasible node. With FPGA offload
+            // enabled and a GEMM-class segment, hybrid boards whose fabric
+            // can stage the segment's weights in block RAM sort ahead of
+            // plain silicon; ties break by most remaining headroom.
+            let mut best: Option<(usize, u64, bool)> = None; // (node, room, fabric)
             for s in 0..topology.nodes.len() {
                 let used = shards
                     .iter()
@@ -217,28 +284,41 @@ pub fn partition(
                     .map(|acc| acc.bytes)
                     .sum::<u64>();
                 let room = budget_for(s).saturating_sub(used);
+                if room < b {
+                    continue;
+                }
+                let fabric = gemm_segment
+                    && segment_bram > 0
+                    && topology.nodes[s]
+                        .fpga
+                        .is_some_and(|f| f.block_ram_bytes >= segment_bram);
                 let better = match best {
                     None => true,
-                    Some((_, r)) => room > r,
+                    Some((_, r, f)) => (fabric && !f) || (fabric == f && room > r),
                 };
-                if room >= b && better {
-                    best = Some((s, room));
+                if better {
+                    best = Some((s, room, fabric));
                 }
             }
-            let (s, _) = best.ok_or_else(|| Error::OutOfMemory {
+            let (s, _, fabric) = best.ok_or_else(|| Error::OutOfMemory {
                 node: "any swarm node".into(),
                 needed: b,
                 available: memories.iter().copied().max().unwrap_or(0),
             })?;
+            current_fabric = fabric;
             let pos = shards.len();
             shards.push(ShardAcc {
                 swarm_node: s,
                 bytes: 0,
                 nodes: Vec::new(),
+                fpga_ops: Vec::new(),
             });
             current = Some(pos);
             pos
         };
+        if current_fabric && is_gemm_class(&n.op) {
+            shards[pos].fpga_ops.push(NodeId(i as u32));
+        }
         shards[pos].bytes += b;
         shards[pos].nodes.push(NodeId(i as u32));
         assignment[i] = Some(pos);
@@ -262,6 +342,7 @@ pub fn partition(
                     swarm_node: 0,
                     bytes: 0,
                     nodes: Vec::new(),
+                    fpga_ops: Vec::new(),
                 });
                 0
             }
@@ -316,6 +397,7 @@ pub fn partition(
 
     let weight_bytes_total = shards.iter().map(|acc| acc.bytes).sum();
     let max_shard_weight_bytes = shards.iter().map(|acc| acc.bytes).max().unwrap_or(0);
+    let fpga_offload_ops = shards.iter().map(|acc| acc.fpga_ops.len() as u64).sum();
 
     // Map every IR node to its *swarm node id* via its shard.
     let mut assignments = BTreeMap::new();
@@ -332,6 +414,7 @@ pub fn partition(
             graph_nodes: acc.nodes,
             weight_bytes: acc.bytes,
             kv_cache_bytes: kv_reserved(acc.swarm_node),
+            fpga_ops: acc.fpga_ops,
         })
         .collect();
 
@@ -345,6 +428,7 @@ pub fn partition(
             cut_edges,
             weight_bytes_total,
             max_shard_weight_bytes,
+            fpga_offload_ops,
         },
     })
 }
@@ -551,8 +635,8 @@ mod tests {
 
     #[test]
     fn hybrid_node_partitions_like_a_plain_one() {
-        // A silicon+FPGA node must not change placement or panic — the
-        // profile is descriptive metadata only, not read by the planner.
+        // With FPGA offload disabled (the default), a silicon+FPGA node must
+        // not change placement or panic.
         let g = mlp_graph(64);
         let nodes = vec![SwarmNode::with_fpga(
             0,
@@ -569,5 +653,138 @@ mod tests {
         let plan = partition(&g, &topo, &PartitionOptions::default()).unwrap();
         assert_eq!(plan.shards.len(), 1);
         assert_eq!(topo.nodes[0].fpga.unwrap().luts, 20_000);
+        assert!(!plan.shards[0].fpga_offload());
+        assert_eq!(plan.stats.fpga_offload_ops, 0);
+    }
+
+    /// [plain 4 MiB node, hybrid node with the given BRAM].
+    fn hybrid_fleet(bram: u64) -> Topology {
+        let nodes = vec![
+            SwarmNode::new(0, "plain", NodeArch::Esp32, 4 * MIB),
+            SwarmNode::with_fpga(
+                1,
+                "hybrid",
+                NodeArch::RiscV,
+                4 * MIB,
+                FpgaProfile {
+                    luts: 60_000,
+                    dsp_slices: 128,
+                    block_ram_bytes: bram,
+                },
+            ),
+        ];
+        Topology::from_parts(
+            nodes,
+            vec![vec![0.0, 1.0], vec![1.0, 0.0]],
+            vec![vec![0.0, 1.0e6], vec![1.0e6, 0.0]],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn fpga_offload_prefers_hybrid_for_gemm_segments() {
+        // 2 MiB of weights fit either node's memory; with offload enabled the
+        // GEMM segment should land on the fabric-equipped board.
+        let g = mlp_graph(1024); // 2 MiB weights
+        let topo = hybrid_fleet(4 * MIB);
+        let opts = PartitionOptions {
+            fpga_offload: true,
+            ..Default::default()
+        };
+        let plan = partition(&g, &topo, &opts).unwrap();
+        assert_eq!(plan.shards.len(), 1);
+        assert_eq!(plan.shards[0].swarm_node, 1, "GEMM segment prefers hybrid");
+        assert!(plan.shards[0].fpga_offload());
+        assert_eq!(plan.stats.fpga_offload_ops, 1); // the matmul
+        assert!(plan.shards[0]
+            .fpga_ops
+            .iter()
+            .all(|&id| matches!(g.get_node(id).unwrap().op, Op::MatMul)));
+    }
+
+    #[test]
+    fn fpga_offload_falls_back_when_bram_too_small() {
+        // The fabric cannot stage 2 MiB of weights: keep the shard on plain
+        // silicon rather than failing.
+        let g = mlp_graph(1024);
+        let topo = hybrid_fleet(64 * 1024);
+        let opts = PartitionOptions {
+            fpga_offload: true,
+            ..Default::default()
+        };
+        let plan = partition(&g, &topo, &opts).unwrap();
+        assert_eq!(plan.shards[0].swarm_node, 0, "falls back to plain node");
+        assert!(!plan.shards[0].fpga_offload());
+        assert_eq!(plan.stats.fpga_offload_ops, 0);
+    }
+
+    #[test]
+    fn fpga_offload_ignores_non_gemm_segments() {
+        // Elementwise-only graphs gain nothing from a fabric; placement must
+        // stay on the most-headroom (plain) node and mark nothing offloaded.
+        let mut g = Graph::new("eltwise");
+        let x = g.push(
+            "",
+            Op::Input(TensorDesc::new(vec![8], DType::F32)),
+            Vec::<NodeId>::new(),
+        );
+        let y = g.push("", Op::Gelu, vec![x]);
+        let o = g.push("", Op::Output { name: "o".into() }, vec![y]);
+        g.mark_output(o);
+
+        let topo = hybrid_fleet(4 * MIB);
+        let opts = PartitionOptions {
+            fpga_offload: true,
+            ..Default::default()
+        };
+        let plan = partition(&g, &topo, &opts).unwrap();
+        assert!(!plan.shards[0].fpga_offload());
+        assert_eq!(plan.stats.fpga_offload_ops, 0);
+    }
+
+    #[test]
+    fn runtime_report_updates_capability_between_runs() {
+        // A hybrid board whose fabric starts small: the GEMM segment falls
+        // back to silicon. After an overlay load the node re-reports a larger
+        // fabric; re-partitioning against the same topology object now
+        // offloads onto it — and tearing the overlay down reverts.
+        let g = mlp_graph(1024); // 2 MiB weights
+        let mut topo = hybrid_fleet(64 * 1024);
+        let opts = PartitionOptions {
+            fpga_offload: true,
+            ..Default::default()
+        };
+
+        let before = partition(&g, &topo, &opts).unwrap();
+        assert_eq!(before.shards[0].swarm_node, 0);
+        assert!(!before.shards[0].fpga_offload());
+
+        topo.report_fpga(
+            1,
+            Some(FpgaProfile {
+                luts: 60_000,
+                dsp_slices: 128,
+                block_ram_bytes: 4 * MIB,
+            }),
+        )
+        .unwrap();
+        let after = partition(&g, &topo, &opts).unwrap();
+        assert_eq!(after.shards[0].swarm_node, 1);
+        assert!(after.shards[0].fpga_offload());
+
+        // Overlay torn down again: capability reverts.
+        topo.report_fpga(1, None).unwrap();
+        let reverted = partition(&g, &topo, &opts).unwrap();
+        assert!(!reverted.shards[0].fpga_offload());
+    }
+
+    #[test]
+    fn report_fpga_rejects_unknown_node() {
+        let mut topo = hybrid_fleet(4 * MIB);
+        let err = topo.report_fpga(9, None).unwrap_err();
+        assert!(matches!(
+            err,
+            tpt_crucible_common::Error::InvalidArgument(_)
+        ));
     }
 }

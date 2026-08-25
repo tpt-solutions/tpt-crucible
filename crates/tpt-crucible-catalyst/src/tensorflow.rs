@@ -1,7 +1,7 @@
 //! TensorFlow SavedModel ingestion (`saved_model.pb`).
 //!
 //! A native, dependency-free reader built on the shared protobuf wire-format
-//! decoder ([`crate::pb`]). A SavedModel is a `SavedModel` proto holding one
+//! decoder (`crate::pb`). A SavedModel is a `SavedModel` proto holding one
 //! or more tagged `MetaGraphDef`s, each carrying an encoded `GraphDef` of
 //! `NodeDef`s plus optional `SignatureDef` maps naming the served inputs and
 //! outputs.
@@ -87,7 +87,10 @@ fn parse_shape(buf: &[u8]) -> Result<Shape> {
     Ok(s)
 }
 
-/// Parsed `TensorProto` (inline payload variants we consume).
+/// Parsed `TensorProto` (inline payload variants we consume). Field numbers
+/// follow `tensorflow/core/framework/tensor.proto`: `dtype(1)`,
+/// `tensor_shape(2)`, `tensor_content(4)`, `float_val(5)`, `double_val(6)`,
+/// `int_val(7)`, `int64_val(10)`, `bool_val(11)`, `half_val(13)`.
 #[derive(Debug, Default, Clone)]
 struct TfTensor {
     dtype: i64,
@@ -107,13 +110,13 @@ fn parse_tensor_proto(buf: &[u8]) -> Result<TfTensor> {
         match field {
             1 => t.dtype = r.varint()? as i64,
             2 => t.shape = parse_shape(r.bytes()?)?,
+            4 => t.tensor_content = r.bytes()?.to_vec(),
             5 => repeated_f32(wt, r, &mut t.float_val)?,
             6 => repeated_f64(wt, r, &mut t.double_val)?,
             7 => repeated_i64(wt, r, &mut t.int_val)?,
-            8 => t.tensor_content = r.bytes()?.to_vec(),
-            12 => repeated_i64(wt, r, &mut t.int64_val)?,
+            10 => repeated_i64(wt, r, &mut t.int64_val)?,
+            11 => repeated_bool(wt, r, &mut t.bool_val)?,
             13 => repeated_i64(wt, r, &mut t.half_val)?,
-            14 => repeated_bool(wt, r, &mut t.bool_val)?,
             _ => r.skip(wt)?,
         }
         Ok(())
@@ -122,7 +125,10 @@ fn parse_tensor_proto(buf: &[u8]) -> Result<TfTensor> {
 }
 
 /// Parsed `AttrValue` (last `oneof` branch wins, matching protobuf merge
-/// semantics for the branches we consume).
+/// semantics for the branches we consume). Field numbers follow
+/// `tensorflow/core/framework/attr_value.proto`: the `oneof value` branches
+/// are `list(1)`, `s(2)`, `i(3)`, `f(4)`, `b(5)`, `type(6)`, `shape(7)`,
+/// `tensor(8)`; `func(10)`/`placeholder(9)` are skipped.
 #[derive(Debug, Default, Clone)]
 struct TfAttr {
     /// Raw `s` (bytes/string) payload; compared, never decoded as UTF-8.
@@ -146,33 +152,38 @@ impl TfAttr {
     fn i_or(attrs: &[(String, TfAttr)], name: &str, default: i64) -> i64 {
         Self::get(attrs, name).map(|a| a.i).unwrap_or(default)
     }
+
+    fn b_or(attrs: &[(String, TfAttr)], name: &str, default: bool) -> bool {
+        Self::get(attrs, name).map(|a| a.b).unwrap_or(default)
+    }
 }
 
 fn parse_attr_value(buf: &[u8]) -> Result<TfAttr> {
     let mut a = TfAttr::default();
     for_fields(buf, |field, wt, r| {
         match field {
-            1 => a.s = r.bytes()?.to_vec(), // AttrValue.s
-            2 => a.i = r.varint()? as i64,  // AttrValue.i
-            3 => a.f = r.fixed32()?,       // AttrValue.f
-            4 => {
-                a.b = r.varint()? != 0; // AttrValue.b
-                a.has_b = true;
-            }
-            5 => a.dtype = r.varint()? as i64,                     // AttrValue.type
-            6 => a.shape = Some(parse_shape(r.bytes()?)?),         // AttrValue.shape
-            7 => a.tensor = Some(parse_tensor_proto(r.bytes()?)?), // AttrValue.tensor
-            10 => {
-                // ListValue { shape(12), ... } — only shapes matter today.
+            1 => {
+                // ListValue { shape(6), ... } — only shapes matter today
+                // (`_output_shapes` bookkeeping).
                 let list = r.bytes()?;
                 for_fields(list, |f2, w2, r2| {
                     match f2 {
-                        12 => a.shapes.push(parse_shape(r2.bytes()?)?),
+                        6 => a.shapes.push(parse_shape(r2.bytes()?)?),
                         _ => r2.skip(w2)?,
                     }
                     Ok(())
                 })?;
             }
+            2 => a.s = r.bytes()?.to_vec(), // AttrValue.s
+            3 => a.i = r.varint()? as i64,  // AttrValue.i
+            4 => a.f = r.fixed32()?,        // AttrValue.f
+            5 => {
+                a.b = r.varint()? != 0; // AttrValue.b
+                a.has_b = true;
+            }
+            6 => a.dtype = r.varint()? as i64, // AttrValue.type
+            7 => a.shape = Some(parse_shape(r.bytes()?)?), // AttrValue.shape
+            8 => a.tensor = Some(parse_tensor_proto(r.bytes()?)?), // AttrValue.tensor
             _ => r.skip(wt)?,
         }
         Ok(())
@@ -195,24 +206,6 @@ fn parse_map_entry(buf: &[u8]) -> Result<(String, Vec<u8>)> {
     Ok((key, value))
 }
 
-/// Walk a repeated protobuf `map` field (entries appear back-to-back at the
-/// field's number) into `(key, value)` pairs.
-fn parse_map_entries(buf: &[u8]) -> Result<Vec<(String, Vec<u8>)>> {
-    let mut out = Vec::new();
-    let mut r = Rd::new(buf, PATH, FORMAT);
-    while !r.eof() {
-        let key = r.varint()?;
-        let field = (key >> 3) as u32;
-        let wt = (key & 7) as u8;
-        if wt != 2 || (field != 1 && field != 2) {
-            r.skip(wt)?;
-            continue;
-        }
-        out.push(parse_map_entry(r.bytes()?)?);
-    }
-    Ok(out)
-}
-
 /// Parsed `NodeDef`. TF `NodeDef`s do **not** list their outputs; every op we
 /// support produces exactly one value named after the node.
 #[derive(Debug, Default, Clone)]
@@ -227,7 +220,11 @@ struct TfNode {
 /// Normalize a `NodeDef.input` string: `^ctrl` deps drop out (`None`), and a
 /// trailing numeric `:port` is removed (TF names cannot contain `:`).
 fn clean_input(raw: &str) -> Option<String> {
-    let s = raw.strip_prefix('^')?;
+    // Control dependencies carry no data.
+    let s = match raw.strip_prefix('^') {
+        Some(_) => return None,
+        None => raw,
+    };
     let head = match s.rsplit_once(':') {
         Some((h, tail)) if !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit()) => h,
         _ => s,
@@ -278,21 +275,19 @@ struct Signature {
     outputs: Vec<SignatureIo>,
 }
 
-fn parse_tensor_info_map(buf: &[u8]) -> Result<Vec<SignatureIo>> {
-    let mut out = Vec::new();
-    for (key, val) in parse_map_entries(buf)? {
-        // TensorInfo { name(1): string, dtype(2), tensor_shape(3), ... }
-        let mut tensor_name = String::new();
-        for_fields(&val, |f2, w2, r2| {
-            match f2 {
-                1 => tensor_name = str_field(r2)?,
-                _ => r2.skip(w2)?,
-            }
-            Ok(())
-        })?;
-        out.push(SignatureIo { key, tensor_name });
-    }
-    Ok(out)
+/// Parsed one `TensorInfo` map entry: `key -> { name(1) }`.
+fn parse_tensor_info_entry(buf: &[u8]) -> Result<SignatureIo> {
+    let (key, val) = parse_map_entry(buf)?;
+    // TensorInfo { name(1): string, dtype(2), tensor_shape(3), ... }
+    let mut tensor_name = String::new();
+    for_fields(&val, |f2, w2, r2| {
+        match f2 {
+            1 => tensor_name = str_field(r2)?,
+            _ => r2.skip(w2)?,
+        }
+        Ok(())
+    })?;
+    Ok(SignatureIo { key, tensor_name })
 }
 
 fn parse_signature(name: String, buf: &[u8]) -> Result<Signature> {
@@ -300,8 +295,10 @@ fn parse_signature(name: String, buf: &[u8]) -> Result<Signature> {
     let mut outputs = Vec::new();
     for_fields(buf, |field, wt, r| {
         match field {
-            1 => inputs.extend(parse_tensor_info_map(r.bytes()?)?), // SignatureDef.inputs
-            2 => outputs.extend(parse_tensor_info_map(r.bytes()?)?), // SignatureDef.outputs
+            // SignatureDef.inputs/outputs are `map<string, TensorInfo>`; each
+            // entry arrives as its own length-delimited field occurrence.
+            1 => inputs.push(parse_tensor_info_entry(r.bytes()?)?),
+            2 => outputs.push(parse_tensor_info_entry(r.bytes()?)?),
             _ => r.skip(wt)?,
         }
         Ok(())
@@ -350,11 +347,10 @@ fn parse_meta_graph(buf: &[u8]) -> Result<MetaGraph> {
                 })?;
             }
             3 => {
-                // signature_def: map<string, SignatureDef>
-                for (sig_name, sig_buf) in parse_map_entries(r.bytes()?)? {
-                    mg.signatures
-                        .push(parse_signature(sig_name, &sig_buf)?);
-                }
+                // signature_def: map<string, SignatureDef>; each entry is its
+                // own length-delimited occurrence of field 3.
+                let (sig_name, sig_buf) = parse_map_entry(r.bytes()?)?;
+                mg.signatures.push(parse_signature(sig_name, &sig_buf)?);
             }
             _ => r.skip(wt)?,
         }
@@ -488,9 +484,7 @@ fn const_i64s(g: &Graph, id: NodeId) -> Result<Vec<i64>> {
     let tensor = match &node.op {
         Op::Constant { tensor } => tensor,
         _ => {
-            return Err(malformed(
-                "expected a constant initializer for this input",
-            ));
+            return Err(malformed("expected a constant initializer for this input"));
         }
     };
     let bytes = tensor.data.as_slice();
@@ -513,12 +507,16 @@ fn const_i64s(g: &Graph, id: NodeId) -> Result<Vec<i64>> {
 fn placeholder_desc(node: &TfNode) -> Result<TensorDesc> {
     let dtype = TfAttr::get(&node.attrs, "dtype")
         .map(|a| a.dtype)
-        .ok_or_else(|| malformed(&format!("placeholder `{}` lacks a dtype attribute", node.name)))?;
+        .ok_or_else(|| {
+            malformed(&format!(
+                "placeholder `{}` lacks a dtype attribute",
+                node.name
+            ))
+        })?;
     let shape = TfAttr::get(&node.attrs, "shape")
         .and_then(|a| a.shape.clone())
         .or_else(|| {
-            TfAttr::get(&node.attrs, "_output_shapes")
-                .and_then(|a| a.shapes.first().cloned())
+            TfAttr::get(&node.attrs, "_output_shapes").and_then(|a| a.shapes.first().cloned())
         });
     let Some(shape) = shape else {
         return Err(malformed(&format!(
@@ -600,19 +598,22 @@ fn build_node(b: &mut Builder, node: &TfNode) -> Result<Option<NodeId>> {
             b.record(&node.name, ins[0])?;
             Ok(None)
         }
-        op @ ("VariableV2" | "VarHandleOp" | "ReadVariableOp" | "ResourceGather"
-        | "ResourceGatherNd" | "MutableHashTableOfTensors" | "MutableHashTableV2") => {
-            Err(Error::UnsupportedOperation(format!(
-                "tf op `{op}` reads weights from a `variables/` checkpoint; \
+        op @ ("VariableV2"
+        | "VarHandleOp"
+        | "ReadVariableOp"
+        | "ResourceGather"
+        | "ResourceGatherNd"
+        | "MutableHashTableOfTensors"
+        | "MutableHashTableV2") => Err(Error::UnsupportedOperation(format!(
+            "tf op `{op}` reads weights from a `variables/` checkpoint; \
                  embed weights as Const nodes (frozen graph) — checkpoint \
                  loading is not supported yet"
-            )))
-        }
+        ))),
         "MatMul" => {
             let ins = resolve(b, node)?;
             let mut a = ins[0];
             let mut bt = ins[1];
-            if TfAttr::i_or(&node.attrs, "transpose_a", 0) != 0 {
+            if TfAttr::b_or(&node.attrs, "transpose_a", false) {
                 a = b.push(
                     "",
                     Op::Transpose {
@@ -621,7 +622,7 @@ fn build_node(b: &mut Builder, node: &TfNode) -> Result<Option<NodeId>> {
                     vec![a],
                 );
             }
-            if TfAttr::i_or(&node.attrs, "transpose_b", 0) != 0 {
+            if TfAttr::b_or(&node.attrs, "transpose_b", false) {
                 bt = b.push(
                     "",
                     Op::Transpose {
@@ -635,8 +636,8 @@ fn build_node(b: &mut Builder, node: &TfNode) -> Result<Option<NodeId>> {
             Ok(Some(id))
         }
         "BatchMatMul" | "BatchMatMulV2" | "BatchMatMulV3" => {
-            if TfAttr::i_or(&node.attrs, "adj_x", 0) != 0
-                || TfAttr::i_or(&node.attrs, "adj_y", 0) != 0
+            if TfAttr::b_or(&node.attrs, "adj_x", false)
+                || TfAttr::b_or(&node.attrs, "adj_y", false)
             {
                 return Err(Error::UnsupportedOperation(
                     "batched adjoint (adj_x/adj_y) requires static rank inference".into(),
@@ -731,7 +732,9 @@ fn build_simple_op(
         }
         "ConcatV2" => {
             // TF puts the concat axis in the LAST input.
-            let axis_id = *ins.last().ok_or_else(|| malformed("ConcatV2 with no inputs"))?;
+            let axis_id = *ins
+                .last()
+                .ok_or_else(|| malformed("ConcatV2 with no inputs"))?;
             let axis = const_i64s(&b.g, axis_id)?;
             concat(b, node, axis.first().copied(), {
                 ins.truncate(ins.len() - 1);
@@ -784,8 +787,67 @@ fn concat(b: &mut Builder, node: &TfNode, axis: Option<i64>, ins: Vec<NodeId>) -
             "negative concat axis requires rank inference (pending)".into(),
         ));
     }
-    Ok(b.push(&node.name, Op::Concat { axis: axis as usize }, ins))
+    Ok(b.push(
+        &node.name,
+        Op::Concat {
+            axis: axis as usize,
+        },
+        ins,
+    ))
 }
+
+/// Every TF op this lowering understands, checked up front so unsupported
+/// graphs fail fast naming the op instead of stalling mid-schedule with an
+/// opaque "unresolved value names" error. Variable/checkpoint ops are listed
+/// too — they are *known* but rejected later with structured guidance.
+const KNOWN_OPS: &[&str] = &[
+    "Const",
+    "Placeholder",
+    "PlaceholderV2",
+    "PlaceholderWithDefault",
+    "Identity",
+    "StopGradient",
+    "Snapshot",
+    "VariableV2",
+    "VarHandleOp",
+    "ReadVariableOp",
+    "ResourceGather",
+    "ResourceGatherNd",
+    "MutableHashTableOfTensors",
+    "MutableHashTableV2",
+    "MatMul",
+    "BatchMatMul",
+    "BatchMatMulV2",
+    "BatchMatMulV3",
+    "Add",
+    "AddV2",
+    "BiasAdd",
+    "BiasAddV1",
+    "Sub",
+    "Mul",
+    "MulNoNan",
+    "Div",
+    "RealDiv",
+    "DivNoNan",
+    "Softmax",
+    "Reshape",
+    "Transpose",
+    "ConcatV2",
+    "Concat",
+    "Cast",
+    "Neg",
+    "Exp",
+    "Log",
+    "Sqrt",
+    "SqrtV2",
+    "Sin",
+    "Cos",
+    "Tanh",
+    "Erf",
+    "Relu",
+    "Sigmoid",
+    "Gelu",
+];
 
 /// Parse a binary `saved_model.pb` into TPT-IR.
 pub fn parse_bytes(bytes: &[u8], source_name: &str) -> Result<Graph> {
@@ -798,6 +860,16 @@ pub fn parse_bytes(bytes: &[u8], source_name: &str) -> Result<Graph> {
         .iter()
         .find(|m| m.tags.iter().any(|t| t == "serve"))
         .unwrap_or(&metas[0]);
+
+    // Fail fast on ops we cannot lower, before topology resolution muddies
+    // the diagnostic.
+    if let Some(n) = mg
+        .nodes
+        .iter()
+        .find(|n| !KNOWN_OPS.contains(&n.op.as_str()))
+    {
+        return Err(Error::UnsupportedOperation(format!("tf op `{}`", n.op)));
+    }
 
     let mut b = Builder {
         g: Graph::new(source_name),
@@ -843,14 +915,19 @@ pub fn parse_bytes(bytes: &[u8], source_name: &str) -> Result<Graph> {
     }
 
     // Graph outputs: signature_def entries when present (prefer
-    // `serving_default`), else every dangling producer.
+    // `serving_default`), else every dangling producer. Signature outputs are
+    // named by their signature key (the externally visible name).
     let sig = mg
         .signatures
         .iter()
         .find(|s| s.name == "serving_default")
         .or_else(|| mg.signatures.first());
-    let out_names: Vec<String> = match sig {
-        Some(s) => s.outputs.iter().map(|o| o.tensor_name.clone()).collect(),
+    let outs: Vec<(String, String)> = match sig {
+        Some(s) => s
+            .outputs
+            .iter()
+            .map(|o| (o.key.clone(), o.tensor_name.clone()))
+            .collect(),
         None => {
             let consumed: HashSet<&str> = mg
                 .nodes
@@ -861,23 +938,24 @@ pub fn parse_bytes(bytes: &[u8], source_name: &str) -> Result<Graph> {
             b.order
                 .iter()
                 .filter(|name| !consumed.contains(name.as_str()))
-                .cloned()
+                .map(|name| (name.clone(), name.clone()))
                 .collect()
         }
     };
-    if out_names.is_empty() {
+    if outs.is_empty() {
         return Err(malformed(
             "no graph outputs could be determined (no signature_def and no dangling producers)",
         ));
     }
 
-    for name in out_names {
-        let value = clean_input(&name).ok_or_else(|| malformed("control edge named as output"))?;
+    for (out_name, tensor_name) in outs {
+        let value =
+            clean_input(&tensor_name).ok_or_else(|| malformed("control edge named as output"))?;
         let inner = *b
             .vals
             .get(&value)
             .ok_or_else(|| malformed(&format!("graph output `{value}` never produced")))?;
-        let out = b.push("", Op::Output { name: value }, vec![inner]);
+        let out = b.push("", Op::Output { name: out_name }, vec![inner]);
         b.g.mark_output(out);
     }
 
@@ -916,4 +994,383 @@ pub fn ingest(path: &Path) -> Result<Graph> {
         .unwrap_or("model")
         .to_string();
     parse_bytes(&bytes, &name)
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+
+    // ---- protobuf encoding helpers (test fixtures) ----
+
+    fn varint(mut v: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            let b = (v & 0x7f) as u8;
+            v >>= 7;
+            if v == 0 {
+                out.push(b);
+                break;
+            }
+            out.push(b | 0x80);
+        }
+        out
+    }
+
+    fn tag(field: u32, wt: u8) -> Vec<u8> {
+        varint(((field as u64) << 3) | wt as u64)
+    }
+
+    fn ld(field: u32, payload: &[u8]) -> Vec<u8> {
+        let mut out = tag(field, 2);
+        out.extend(varint(payload.len() as u64));
+        out.extend_from_slice(payload);
+        out
+    }
+
+    fn s(field: u32, v: &str) -> Vec<u8> {
+        ld(field, v.as_bytes())
+    }
+
+    fn vi(field: u32, v: u64) -> Vec<u8> {
+        let mut out = tag(field, 0);
+        out.extend(varint(v));
+        out
+    }
+
+    /// `TensorShapeProto` with concrete dims.
+    fn shape_msg(dims: &[i64]) -> Vec<u8> {
+        let mut m = Vec::new();
+        for &d in dims {
+            m.extend(ld(2, &vi(1, d as u64)));
+        }
+        m
+    }
+
+    /// `TensorProto` carrying raw little-endian payload (`tensor_content(4)`).
+    fn tensor_proto(dtype: i64, dims: &[i64], raw: &[u8]) -> Vec<u8> {
+        let mut m = vi(1, dtype as u64);
+        m.extend(ld(2, &shape_msg(dims)));
+        m.extend(ld(4, raw));
+        m
+    }
+
+    fn f32_le(vals: &[f32]) -> Vec<u8> {
+        vals.iter().flat_map(|v| v.to_le_bytes()).collect()
+    }
+
+    fn i64_le(vals: &[i64]) -> Vec<u8> {
+        vals.iter().flat_map(|v| v.to_le_bytes()).collect()
+    }
+
+    /// One `NodeDef.attr` map entry binding `key` to an encoded `AttrValue`.
+    fn attr(key: &str, value: &[u8]) -> Vec<u8> {
+        let mut e = s(1, key);
+        e.extend(ld(2, value));
+        e
+    }
+
+    /// A `Const.value` attribute: `AttrValue { tensor(8) }`.
+    fn value_attr(dtype: i64, dims: &[i64], raw: &[u8]) -> Vec<u8> {
+        attr("value", &ld(8, &tensor_proto(dtype, dims, raw)))
+    }
+
+    fn node(name: &str, op: &str, ins: &[&str], attrs: Vec<Vec<u8>>) -> Vec<u8> {
+        let mut m = s(1, name);
+        m.extend(s(2, op));
+        for i in ins {
+            m.extend(s(3, i));
+        }
+        for a in attrs {
+            m.extend(ld(5, &a));
+        }
+        m
+    }
+
+    fn graph_def(nodes: Vec<Vec<u8>>) -> Vec<u8> {
+        let mut m = Vec::new();
+        for n in nodes {
+            m.extend(ld(1, &n));
+        }
+        m
+    }
+
+    /// `MetaInfoDef` with tags + TensorFlow version.
+    fn meta_info(tags: &[&str], version: &str) -> Vec<u8> {
+        let mut m = Vec::new();
+        for t in tags {
+            m.extend(s(4, t));
+        }
+        m.extend(s(5, version));
+        m
+    }
+
+    /// One `TensorInfo` map entry (`{key: name}`).
+    fn ti_entry(key: &str, tensor: &str) -> Vec<u8> {
+        let mut e = s(1, key);
+        e.extend(ld(2, &s(1, tensor)));
+        e
+    }
+
+    /// `SignatureDef` body from its inputs/outputs map entries.
+    fn sig_body(inputs: &[Vec<u8>], outputs: &[Vec<u8>]) -> Vec<u8> {
+        let mut m = Vec::new();
+        for i in inputs {
+            m.extend(ld(1, i));
+        }
+        for o in outputs {
+            m.extend(ld(2, o));
+        }
+        m
+    }
+
+    /// `SavedModel { meta_graphs(1) }` over one `MetaGraphDef`.
+    fn saved_model(meta: Option<Vec<u8>>, graph: Vec<u8>, sigs: Option<Vec<u8>>) -> Vec<u8> {
+        let mut mg = Vec::new();
+        if let Some(info) = meta {
+            mg.extend(ld(1, &info));
+        }
+        mg.extend(ld(2, &graph));
+        if let Some(sv) = sigs {
+            mg.extend(ld(3, &sv));
+        }
+        ld(1, &mg)
+    }
+
+    /// A dense layer served under `serving_default`: x → MatMul(w) → BiasAdd → Softmax.
+    ///
+    /// Inputs exercise port suffixes (`w:0`) and control deps (`^x`) on edges.
+    pub(crate) fn fixture_serving_minimal() -> Vec<u8> {
+        let dt_f32 = vi(6, 1); // AttrValue.type = DT_FLOAT
+        let x = node(
+            "x",
+            "Placeholder",
+            &[],
+            vec![
+                attr("dtype", &dt_f32),
+                attr("_output_shapes", &ld(1, &ld(6, &shape_msg(&[1, 4])))),
+            ],
+        );
+        let w_bytes = f32_le(&(0..16).map(|i| i as f32).collect::<Vec<_>>());
+        let w = node("w", "Const", &[], vec![value_attr(1, &[4, 4], &w_bytes)]);
+        let bias = node(
+            "b",
+            "Const",
+            &[],
+            vec![value_attr(1, &[4], &f32_le(&[0.5; 4]))],
+        );
+        let mm = node("mm", "MatMul", &["x", "w:0"], vec![]);
+        let bi = node("bi", "BiasAdd", &["mm", "b"], vec![]);
+        let sm = node(
+            "sm",
+            "Softmax",
+            &["^x", "bi"],
+            vec![attr("axis", &vi(3, (-1i64) as u64))],
+        );
+
+        let graph = graph_def(vec![x, w, bias, mm, bi, sm]);
+        let info = meta_info(&["serve"], "2.16.1");
+        let sigs = {
+            let mut e = s(1, "serving_default");
+            e.extend(ld(
+                2,
+                &sig_body(&[ti_entry("x", "x")], &[ti_entry("dense", "sm")]),
+            ));
+            e
+        };
+        saved_model(Some(info), graph, Some(sigs))
+    }
+
+    fn out_name(g: &Graph) -> String {
+        let n = g
+            .nodes
+            .iter()
+            .find(|n| matches!(n.op, Op::Output { .. }))
+            .expect("graph has an output node");
+        match &n.op {
+            Op::Output { name } => name.clone(),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn parses_serving_minimal() {
+        let g = parse_bytes(&fixture_serving_minimal(), "model").unwrap();
+        assert_eq!(g.metadata("source_format"), Some("tf-savedmodel"));
+        assert_eq!(g.metadata("tf_meta_graph_tags"), Some("serve"));
+        assert_eq!(g.metadata("tf_tensorflow_version"), Some("2.16.1"));
+
+        // x(input) + w(const) + b(const) + matmul + biasadd-as-add + softmax + output
+        assert_eq!(g.len(), 7);
+        assert_eq!(g.inputs.len(), 1);
+        assert_eq!(g.outputs.len(), 1);
+        // The signature key names the served output, not the tensor.
+        assert_eq!(out_name(&g), "dense");
+
+        let hist = g.op_histogram();
+        assert_eq!(hist.get("matmul"), Some(&1));
+        assert_eq!(hist.get("add"), Some(&1)); // BiasAdd lowered
+        assert_eq!(hist.get("softmax"), Some(&1));
+        assert_eq!(hist.get("constant"), Some(&2));
+
+        // Node names survive lowering.
+        assert!(
+            g.nodes
+                .iter()
+                .any(|n| n.name == "sm" && matches!(n.op, Op::Softmax { .. })),
+            "softmax node should keep its name"
+        );
+    }
+
+    #[test]
+    fn matmul_transpose_b_lowers_to_transpose() {
+        let x = node(
+            "x",
+            "Placeholder",
+            &[],
+            vec![
+                attr("dtype", &vi(6, 1)),
+                attr("_output_shapes", &ld(1, &ld(6, &shape_msg(&[1, 4])))),
+            ],
+        );
+        let w = node(
+            "w",
+            "Const",
+            &[],
+            vec![value_attr(1, &[4, 4], &f32_le(&[0.0; 16]))],
+        );
+        let mm = node(
+            "mm",
+            "MatMul",
+            &["x", "w"],
+            vec![attr("transpose_b", &vi(5, 1))],
+        );
+        let bytes = saved_model(None, graph_def(vec![x, w, mm]), None);
+        let g = parse_bytes(&bytes, "model").unwrap();
+        assert_eq!(g.op_histogram().get("transpose"), Some(&1));
+        assert_eq!(g.op_histogram().get("matmul"), Some(&1));
+    }
+
+    #[test]
+    fn concat_v2_takes_axis_from_last_const() {
+        let c = |name: &str, dims: &[i64], raw: Vec<u8>| {
+            node(name, "Const", &[], vec![value_attr(1, dims, &raw)])
+        };
+        let a = c("a", &[2], f32_le(&[1.0, 2.0]));
+        let b = c("b", &[2], f32_le(&[3.0, 4.0]));
+        let axis = node(
+            "axis",
+            "Const",
+            &[],
+            vec![value_attr(9, &[1], &i64_le(&[1]))],
+        );
+        let cc = node("cc", "ConcatV2", &["a", "b", "axis"], vec![]);
+        let bytes = saved_model(None, graph_def(vec![a, b, axis, cc]), None);
+        let g = parse_bytes(&bytes, "model").unwrap();
+        let n = g
+            .nodes
+            .iter()
+            .find(|n| matches!(n.op, Op::Concat { .. }))
+            .expect("concat lowered");
+        assert_eq!(n.op, Op::Concat { axis: 1 });
+        // The axis constant must NOT become an IR input of the concat.
+        assert_eq!(n.inputs.len(), 2);
+    }
+
+    #[test]
+    fn const_float_val_arrays_materialize() {
+        // TensorProto using the typed float_val array instead of raw bytes.
+        let mut tp = vi(1, 1u64); // DT_FLOAT
+        tp.extend(ld(2, &shape_msg(&[2])));
+        tp.extend(ld(5, &f32_le(&[7.5, -2.25]))); // packed float_val
+        let v = node("v", "Const", &[], vec![attr("value", &ld(8, &tp))]);
+        let bytes = saved_model(None, graph_def(vec![v]), None);
+        let g = parse_bytes(&bytes, "model").unwrap();
+        let t = match &g.nodes[0].op {
+            Op::Constant { tensor } => tensor,
+            _ => panic!("expected constant"),
+        };
+        assert_eq!(t.desc.shape, vec![2]);
+        let expected: Vec<u8> = [7.5f32, -2.25]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        assert_eq!(t.data.as_slice(), &expected[..]);
+    }
+
+    #[test]
+    fn variable_checkpoint_rejected_with_guidance() {
+        let var = node("w", "VarHandleOp", &[], vec![attr("dtype", &vi(6, 1))]);
+        let bytes = saved_model(None, graph_def(vec![var]), None);
+        match parse_bytes(&bytes, "model") {
+            Err(Error::UnsupportedOperation(msg)) => {
+                assert!(msg.contains("VarHandleOp"), "{msg}");
+                assert!(msg.contains("variables/"), "{msg}");
+                assert!(msg.contains("frozen graph"), "{msg}");
+            }
+            other => panic!("wrong result: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unknown_op_named_in_error() {
+        let junk = node("junk", "FrobNorm", &["missing"], vec![]);
+        let bytes = saved_model(None, graph_def(vec![junk]), None);
+        let err = parse_bytes(&bytes, "model").unwrap_err();
+        assert!(
+            err.to_string().contains("`FrobNorm`"),
+            "error should name the op: {err}"
+        );
+    }
+
+    #[test]
+    fn placeholder_without_shape_rejected() {
+        let x = node("x", "Placeholder", &[], vec![attr("dtype", &vi(6, 1))]);
+        let y = node("y", "Identity", &["x"], vec![]);
+        let bytes = saved_model(None, graph_def(vec![x, y]), None);
+        let err = parse_bytes(&bytes, "model").unwrap_err();
+        assert!(
+            err.to_string().contains("static shape"),
+            "error should mention static shapes: {err}"
+        );
+    }
+
+    #[test]
+    fn dangling_producers_become_outputs_without_signatures() {
+        let x = node(
+            "x",
+            "Placeholder",
+            &[],
+            vec![
+                attr("dtype", &vi(6, 1)),
+                attr("_output_shapes", &ld(1, &ld(6, &shape_msg(&[1, 4])))),
+            ],
+        );
+        let w = node(
+            "w",
+            "Const",
+            &[],
+            vec![value_attr(1, &[4, 4], &f32_le(&[0.0; 16]))],
+        );
+        let mm = node("mm", "MatMul", &["x", "w"], vec![]);
+        let sm = node("sm", "Softmax", &["mm"], vec![]);
+        let bytes = saved_model(None, graph_def(vec![x, w, mm, sm]), None);
+
+        let g = parse_bytes(&bytes, "model").unwrap();
+        assert_eq!(g.outputs.len(), 1);
+        // `sm` is the only producer nothing consumes.
+        assert_eq!(out_name(&g), "sm");
+    }
+
+    #[test]
+    fn pbtxt_directory_gets_export_guidance() {
+        let dir = std::env::temp_dir().join("catalyst-tf-tests/pbtxt-only");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("saved_model.pbtxt"), b"# text proto").unwrap();
+
+        let err = super::ingest(&dir).unwrap_err();
+        assert!(
+            err.to_string().contains("pbtxt"),
+            "error should mention pbtxt: {err}"
+        );
+    }
 }

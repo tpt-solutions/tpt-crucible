@@ -140,8 +140,15 @@ pub fn parse_bytes(bytes: &[u8], source_name: &str) -> Result<Graph> {
     Ok(graph)
 }
 
-/// Ingest a `.safetensors` file.
+/// Ingest a `.safetensors` file, or a directory of `*.safetensors` shards
+/// (HuggingFace repo layout), merging them into one weight-only graph.
+///
+/// Shards are merged in sorted file-name order; tensor names must be unique
+/// across shards (the HuggingFace convention).
 pub fn ingest(path: &Path) -> Result<Graph> {
+    if path.is_dir() {
+        return ingest_dir(path);
+    }
     let bytes = std::fs::read(path)?;
     let name = path
         .file_stem()
@@ -149,6 +156,56 @@ pub fn ingest(path: &Path) -> Result<Graph> {
         .unwrap_or("model")
         .to_string();
     parse_bytes(&bytes, &name)
+}
+
+/// Merge a directory of `*.safetensors` shards into one graph.
+fn ingest_dir(dir: &Path) -> Result<Graph> {
+    let mut shards: Vec<std::path::PathBuf> = std::fs::read_dir(dir)?
+        .filter_map(std::result::Result::ok)
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("safetensors"))
+        })
+        .collect();
+    shards.sort();
+    if shards.is_empty() {
+        return Err(Error::ParseFormat {
+            path: dir.display().to_string(),
+            format: "safetensors".into(),
+            reason: "directory contains no *.safetensors shards".into(),
+        });
+    }
+
+    let name = dir
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("model")
+        .to_string();
+    let mut g = Graph::new(name);
+    g.set_metadata("source_format", "safetensors");
+    for shard in &shards {
+        let bytes = std::fs::read(shard)?;
+        let stem = shard
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("shard")
+            .to_string();
+        let part = parse_bytes(&bytes, &stem)?;
+        for n in &part.nodes {
+            if g.nodes.iter().any(|e| e.name == n.name) {
+                return Err(Error::ParseFormat {
+                    path: dir.display().to_string(),
+                    format: "safetensors".into(),
+                    reason: format!("tensor `{}` appears in more than one shard", n.name),
+                });
+            }
+            g.push(&n.name, n.op.clone(), Vec::<_>::new());
+        }
+    }
+    g.validate()?;
+    Ok(g)
 }
 
 /// Encode tensors into valid SafeTensors bytes.
@@ -284,5 +341,67 @@ mod tests {
         bytes.push(0);
         let err = parse_bytes(&bytes, "f8").unwrap_err();
         assert!(err.to_string().contains("F8_E4M3"));
+    }
+
+    // ---- HuggingFace directory layout ---------------------------------------
+
+    use crate::format::{self, ModelFormat};
+    use std::io::Write as _;
+
+    fn write_shard(dir: &std::path::Path, name: &str, tensors: &BTreeMap<String, Tensor>) {
+        let mut f = std::fs::File::create(dir.join(name)).unwrap();
+        f.write_all(&encode(tensors).unwrap()).unwrap();
+    }
+
+    fn shard_one() -> BTreeMap<String, Tensor> {
+        let mut m = BTreeMap::new();
+        m.insert(
+            "blk.0.weight".to_string(),
+            Tensor::from_f32(vec![2], &[0.5, -0.5]),
+        );
+        m
+    }
+
+    fn shard_two() -> BTreeMap<String, Tensor> {
+        let mut m = BTreeMap::new();
+        m.insert(
+            "blk.1.weight".to_string(),
+            Tensor::from_f32(vec![2], &[1.5, 2.5]),
+        );
+        m
+    }
+
+    #[test]
+    fn hf_directory_merges_shards_via_registry() {
+        let dir = std::env::temp_dir().join("catalyst-st-tests/hf-model");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.json"), br#"{"model_type":"tiny"}"#).unwrap();
+        write_shard(&dir, "model-00001-of-00002.safetensors", &shard_one());
+        write_shard(&dir, "model-00002-of-00002.safetensors", &shard_two());
+
+        assert_eq!(format::detect(&dir).unwrap(), ModelFormat::SafeTensors);
+        let g = ingest(&dir).unwrap();
+        g.validate().unwrap();
+        assert_eq!(g.metadata("source_format"), Some("safetensors"));
+        assert_eq!(g.len(), 2);
+        assert!(g.nodes.iter().any(|n| n.name == "blk.0.weight"));
+        assert!(g.nodes.iter().any(|n| n.name == "blk.1.weight"));
+    }
+
+    #[test]
+    fn hf_directory_duplicate_tensor_rejected() {
+        let dir = std::env::temp_dir().join("catalyst-st-tests/hf-dup");
+        std::fs::create_dir_all(&dir).unwrap();
+        write_shard(&dir, "a.safetensors", &shard_one());
+        // Same tensor name in a second shard is a packaging error.
+        let mut dup = BTreeMap::new();
+        dup.insert(
+            "blk.0.weight".to_string(),
+            Tensor::from_f32(vec![2], &[9.0, 9.0]),
+        );
+        write_shard(&dir, "b.safetensors", &dup);
+
+        let err = ingest(&dir).unwrap_err();
+        assert!(err.to_string().contains("more than one shard"), "{err}");
     }
 }
