@@ -139,4 +139,15 @@ pub enum Error {
     /// Generic invalid argument from CLI or API misuse.
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
+
+    /// An external tool (yosys, nextpnr, ngspice, Xyce, …) failed or was
+    /// missing. Automation-first surfaces (`spec2.txt` §4.6): the message
+    /// names the tool and what to do about it.
+    #[error("external tool `{tool}`: {message}")]
+    ExternalTool {
+        /// Canonical tool name (`"yosys"`, `"ngspice"`, …).
+        tool: String,
+        /// What happened and how to proceed.
+        message: String,
+    },
 }

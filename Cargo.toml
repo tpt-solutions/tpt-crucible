@@ -11,14 +11,15 @@ repository = "https://github.com/tpt-solutions/tpt-crucible"
 authors = ["TPT Solutions"]
 
 [workspace.dependencies]
-# Internal crates (path-only until first crates.io release; see todo.md).
-tpt-crucible-common = { path = "crates/tpt-crucible-common" }
-tpt-crucible-catalyst = { path = "crates/tpt-crucible-catalyst" }
-tpt-crucible-alloy = { path = "crates/tpt-crucible-alloy" }
-tpt-crucible-fusion = { path = "crates/tpt-crucible-fusion" }
-tpt-crucible-element = { path = "crates/tpt-crucible-element" }
-tpt-crucible-observer = { path = "crates/tpt-crucible-observer" }
-tpt-crucible-uir-adapter = { path = "crates/tpt-crucible-uir-adapter" }
+# Internal crates. `version` is declared so `cargo publish --dry-run` (and
+# the eventual real publish) resolves them; path wins during local builds.
+tpt-crucible-common = { path = "crates/tpt-crucible-common", version = "0.1.0" }
+tpt-crucible-catalyst = { path = "crates/tpt-crucible-catalyst", version = "0.1.0" }
+tpt-crucible-alloy = { path = "crates/tpt-crucible-alloy", version = "0.1.0" }
+tpt-crucible-fusion = { path = "crates/tpt-crucible-fusion", version = "0.1.0" }
+tpt-crucible-element = { path = "crates/tpt-crucible-element", version = "0.1.0" }
+tpt-crucible-observer = { path = "crates/tpt-crucible-observer", version = "0.1.0" }
+tpt-crucible-uir-adapter = { path = "crates/tpt-crucible-uir-adapter", version = "0.1.0" }
 
 # Serialization (pure Rust, wasm-compatible).
 serde = { version = "1.0", features = ["derive"] }

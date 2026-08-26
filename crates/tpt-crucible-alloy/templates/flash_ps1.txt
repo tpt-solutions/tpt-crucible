@@ -1,0 +1,17 @@
+# Master flashing script (PowerShell) - parallel per-node esptool jobs.
+
+$Model = "{{ model }}"
+$Board = "{{ board }}"
+
+$jobs = @(
+{% for t in targets %}  @{ Port = "{{ t.port }}"; Index = "{{ t.index }}" },
+{% endfor -%})
+
+$jobs | ForEach-Object {
+  Start-Job -ArgumentList $_.Port, $_.Index, $Board -ScriptBlock {
+    param($port, $idx, $board)
+    esptool.py --chip $board --port $port --baud 921600 write_flash 0x0 "firmware/node_$idx/firmware.bin"
+  }
+}
+
+Get-Job | Wait-Job

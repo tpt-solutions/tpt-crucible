@@ -1,7 +1,7 @@
 //! The WebSocket telemetry server.
 //!
 //! [`TelemetryServer::bind`] opens a listener and spawns the axum app on the
-//! current tokio runtime. Emitters push [`TelemetryEvent`]s through
+//! current tokio runtime. Emitters push [`TelemetryEvent`](crate::TelemetryEvent)s through
 //! [`TelemetryServer::emit`]; each connected `/ws` client receives every
 //! event as a JSON text frame, fanned out through a `tokio::sync::broadcast`
 //! channel so a slow dashboard never back-pressures the swarm.
@@ -16,21 +16,21 @@ use axum::Router;
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::broadcast;
 
-use crate::TelemetryEvent;
+use crate::ServerEvent;
 use tpt_crucible_common::Error;
 
 /// Broadcast buffer per connected client; overflow marks the client lagged
 /// (skipped events) rather than blocking emitters.
 const CHANNEL_CAPACITY: usize = 1024;
 
-type EventTx = broadcast::Sender<Arc<TelemetryEvent>>;
+type EventTx = broadcast::Sender<Arc<String>>;
 
 #[derive(Clone)]
 struct AppState {
     tx: EventTx,
 }
 
-/// A bound telemetry server broadcasting [`TelemetryEvent`]s over WebSockets.
+/// A bound telemetry server broadcasting [`TelemetryEvent`](crate::TelemetryEvent)s over WebSockets.
 ///
 /// Clone-free emitters: hand [`TelemetryServer::subscribe`] receivers to
 /// in-process dashboards or tests; remote clients connect to `GET /ws`.
@@ -84,14 +84,23 @@ impl TelemetryServer {
 
     /// Fan an event out to every connected WebSocket client.
     ///
+    /// Accepts any [`ServerEvent`] source — plain [`crate::TelemetryEvent`]s
+    /// convert automatically. The frame is serialized once here and fanned
+    /// out as one JSON text line.
+    ///
     /// Returns `false` when no client is connected (the event is dropped —
     /// telemetry is best-effort by design).
-    pub fn emit(&self, event: TelemetryEvent) -> bool {
-        self.tx.send(Arc::new(event)).is_ok()
+    pub fn emit(&self, event: impl Into<ServerEvent>) -> bool {
+        let server_event = event.into();
+        let Ok(json) = serde_json::to_string(&server_event) else {
+            return false;
+        };
+        self.tx.send(Arc::new(json)).is_ok()
     }
 
-    /// In-process tap on the same stream the sockets receive.
-    pub fn subscribe(&self) -> broadcast::Receiver<Arc<TelemetryEvent>> {
+    /// In-process tap on the same stream the sockets receive: one
+    /// pre-serialized JSON line per event.
+    pub fn subscribe(&self) -> broadcast::Receiver<Arc<String>> {
         self.tx.subscribe()
     }
 
@@ -112,15 +121,16 @@ async fn ws_upgrade(
     ws.on_upgrade(move |socket| stream_events(socket, state.tx.subscribe()))
 }
 
-async fn stream_events(socket: WebSocket, mut rx: broadcast::Receiver<Arc<TelemetryEvent>>) {
+async fn stream_events(socket: WebSocket, mut rx: broadcast::Receiver<Arc<String>>) {
     let (mut sink, _incoming) = socket.split();
     loop {
         match rx.recv().await {
-            Ok(event) => {
-                let Ok(json) = serde_json::to_string(event.as_ref()) else {
-                    continue;
-                };
-                if sink.send(Message::Text(json.into())).await.is_err() {
+            Ok(json) => {
+                if sink
+                    .send(Message::Text((*json).clone().into()))
+                    .await
+                    .is_err()
+                {
                     break; // client went away
                 }
             }
@@ -139,6 +149,7 @@ async fn stream_events(socket: WebSocket, mut rx: broadcast::Receiver<Arc<Teleme
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TelemetryEvent;
     use futures_util::StreamExt;
     use std::time::Duration;
     use tokio_tungstenite::tungstenite::Message as WsMessage;
@@ -207,8 +218,37 @@ mod tests {
 
         for expected in [&first, &sample("fusion-00", 3.25)] {
             let text = next_text(&mut client).await;
-            let back: TelemetryEvent = serde_json::from_str(&text).unwrap();
-            assert_eq!(&back, expected);
+            let back: ServerEvent = serde_json::from_str(&text).unwrap();
+            assert_eq!(&back, &ServerEvent::Telemetry(expected.clone()));
+        }
+    }
+
+    #[tokio::test]
+    async fn preflight_events_share_the_stream() {
+        let server = TelemetryServer::bind("127.0.0.1:0").await.unwrap();
+        let addr = server.local_addr();
+
+        let mut client = connect(addr).await;
+        while server.clients() == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+
+        let notice = serde_json::json!({
+            "seq": 0,
+            "node_id": 3,
+            "node_name": "blk.0.attn_q",
+            "op": "matmul",
+            "family": "fusion",
+            "verdict": "supported",
+            "note": "overlay MAC array"
+        });
+        assert!(server.emit(ServerEvent::Preflight(notice.clone())));
+
+        let text = next_text(&mut client).await;
+        assert!(text.contains("\"kind\":\"preflight\""), "{text}");
+        match serde_json::from_str::<ServerEvent>(&text).unwrap() {
+            ServerEvent::Preflight(v) => assert_eq!(v, notice),
+            other => panic!("expected preflight frame, got {other:?}"),
         }
     }
 
@@ -220,7 +260,8 @@ mod tests {
         let ev = sample("element-01", 1.0);
         assert!(server.emit(ev.clone()));
         let got = rx.recv().await.unwrap();
-        assert_eq!(got.as_ref(), &ev);
+        let back: ServerEvent = serde_json::from_str(&got).unwrap();
+        assert_eq!(back, ServerEvent::Telemetry(ev));
     }
 
     #[tokio::test]

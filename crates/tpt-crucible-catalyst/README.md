@@ -21,9 +21,15 @@ Implemented today:
 * Format detection for all twelve roadmap formats (TensorFlow SavedModel,
   TFLite, EXL2, JAX/Flax, Keras recognized; ingestion on the roadmap)
 * `tpt-doctor`: external toolchain discovery and verification
+* Quantization auto-search (`autosearch`): INT4-first planning against an
+  accuracy budget, fragile layers promoted to INT8 first (`.tptprofile`
+  sensitivity data or graph-shape heuristic)
+* Streaming pre-flight (`preflight`): per-family operator compatibility
+  events emitted as the graph is traversed — bridge them to the Observer
+  WebSocket backend with `tpt preflight --serve`
 
 Pure Rust, no heavy dependencies, wasm-compatible.
 
 See the [workspace README](https://github.com/tpt-solutions/tpt-crucible) and
 todo.md for the remaining Phase 1 roadmap (operator fusion via e-graphs,
-quantization auto-search, streaming pre-flight).
+custom MLIR dialect).

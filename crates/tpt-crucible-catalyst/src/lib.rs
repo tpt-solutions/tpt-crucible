@@ -20,6 +20,12 @@
 //!   merging) and **JAX/Flax** (msgpack parameter pytrees via a native
 //!   decoder).
 //! * [`doctor`] - `tpt-doctor` toolchain verifier.
+//! * [`autosearch`] - quantization auto-search against an accuracy budget
+//!   (INT4 baseline, fragile layers promoted to INT8 first).
+//! * [`preflight`] - streaming operator compatibility analysis per hardware
+//!   family (`alloy` / `fusion` / `element`).
+//! * `hub` *(feature `hub`)* - HuggingFace Hub repo download feeding the
+//!   directory-layout ingestion path.
 //!
 //! ```no_run
 //! use tpt_crucible_catalyst::ingest_path;
@@ -31,14 +37,16 @@
 //!
 //! ## Roadmap (tracked in todo.md)
 //!
-//! Egg-based operator fusion, quantization auto-search against an accuracy
-//! budget, streaming pre-flight over WebSockets, and a custom MLIR dialect.
+//! Egg-based operator fusion and a custom MLIR dialect.
 
+pub mod autosearch;
 pub mod doctor;
 pub mod flatbuf;
 pub mod flax;
 pub mod format;
 pub mod gguf;
+#[cfg(feature = "hub")]
+pub mod hub;
 pub mod ingest;
 pub mod keras;
 pub mod llamafile;
@@ -49,6 +57,7 @@ pub mod onnx;
 pub(crate) mod pb;
 pub mod pickle;
 pub mod pkzip;
+pub mod preflight;
 pub mod pytorch;
 pub mod quant;
 pub mod safetensors;

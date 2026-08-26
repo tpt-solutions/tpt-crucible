@@ -61,13 +61,36 @@ broken down per-crate using the key features from `spec2.txt` section 3.
       config.json + `*.safetensors` shards detected as SafeTensors and merged
       into one weight-only graph, duplicate tensor names rejected across
       shards; EXL2 dirs keep their dedicated detection/ingestor)
-- [ ] HuggingFace Hub network fetch (download a repo id into the local cache;
+- [x] HuggingFace Hub network fetch (download a repo id into the local cache;
       needs an HTTP client dependency — deferred)
+      (done as feature-gated `hub` module + `tpt ingest <org/name> --hub`:
+      `ureq`/rustls stays opt-in so the wasm SiL build is untouched; lists
+      repo siblings via the Hub API, downloads `config.json` + every
+      `*.safetensors` shard with `.part` atomic renames and size-skip resume,
+      then feeds the existing HF directory-layout ingestion; verified live
+      against `hf-internal-testing/tiny-random-LlamaForCausalLM`)
 - [ ] Operator fusion via `egg` e-graphs
-- [ ] Quantization auto-search (`--accuracy-budget` flag; INT4 with INT8 promotion on fragile layers, validated against SiL pass / `.tptprofile` sensitivity data)
-- [ ] Streaming pre-flight: operator compatibility analysis streamed to Observer over WebSockets
+      (deferred: pulls a heavyweight e-graph dependency into a deliberately
+      dep-light crate; revisit alongside the executor so fused groups have
+      something to lower into)
+- [x] Quantization auto-search (`--accuracy-budget` flag; INT4 with INT8
+      promotion on fragile layers, validated against SiL pass / `.tptprofile`
+      sensitivity data)
+      (`autosearch`: root-sum-square error model, most-fragile-first
+      promotion to Q8_0; `.tptprofile` sidecar mode + graph-shape heuristic
+      fallback; serializable `QuantPlan`, `tpt quantize` exits non-zero when
+      the budget is unreachable; live SiL validation hooks in once the
+      executor exists)
+- [x] Streaming pre-flight: operator compatibility analysis streamed to Observer over WebSockets
+      (`preflight`: per-node events emitted mid-traversal against a static v1
+      capability matrix for alloy/fusion/emulated/unsupported verdicts;
+      `tpt preflight --serve <addr>` binds the Observer telemetry server and
+      fans events to `/ws` clients as `{"kind":"preflight",…}` frames)
 - [x] `tpt-doctor` toolchain verifier subcommand (scans external tools, checks versions, runs smoke test)
 - [ ] Custom MLIR dialect for TPT-IR (`mlir-sys` / `llvm-sys`)
+      (deferred: requires the LLVM/MLIR native toolchain on every dev/CI
+      machine, contradicting the pure-Rust no-heavy-deps posture; revisit if
+      a consumer actually needs MLIR interop)
 - [x] TPT-IR output serializable to JSON/Binary
 
 ### tpt-crucible-uir-adapter (TPT-UIR compatibility)
@@ -85,9 +108,12 @@ broken down per-crate using the key features from `spec2.txt` section 3.
       tensors (postcard + hand-extended FlatBuffers union support)
 - [x] `ScalarType::Q5_0`/`Q5_1` added to `tpt-uir-core` to match TPT-IR's
       `DType` (postcard, text, FlatBuffers)
-- [ ] `tpt-uir-text`'s parser doesn't yet round-trip `bytes<...>` attributes
-      (printer support added; parsing back not implemented — postcard is the
-      adapter's serialization target, so this hasn't blocked anything yet)
+- [x] `tpt-uir-text`'s parser doesn't yet round-trip `bytes<...>` attributes
+      (fixed in the sibling `tpt-uir` checkout: the lexer now emits a raw
+      `Tok::Hex` for `bytes<...>` payloads so all-digit hex no longer gets
+      mangled into integers, and the parser decodes them into
+      `AttributeValue::Bytes`; round-trip covered by
+      `tpt-uir-text::tests::bytes_attribute_roundtrips_through_text`)
 - [x] Wire `tpt-crucible-catalyst` output through the adapter +
       `tpt-uir-serde`: `tpt ingest --uir <file>` emits a postcard-encoded
       Crucible-dialect region alongside the `.tptir`; end-to-end round trip
@@ -112,11 +138,24 @@ broken down per-crate using the key features from `spec2.txt` section 3.
       the planner, and reports displaced IR nodes plus a new→old survivor
       map; composes with `FailureDetector` output, tolerates duplicate/
       out-of-range ids, rejects all-dead fleets)
-- [ ] Runtime execution engine (distributes shards, drives heartbeats,
+- [x] Runtime execution engine (distributes shards, drives heartbeats,
       triggers recovery on failure)
-- [ ] Rolling pipeline parallelism (eliminates inference stalls)
+      (`runtime::ExecutionEngine`: bincode `ShardDeployment`s keyed by stable
+      topology ids, injected-time `FailureDetector` + automatic
+      `recovery::bypass_dead_nodes` on silence, generation counter and
+      `NodeLost`/`Recovered`/`FleetLost` lifecycle events; transport-free by
+      design — the coordinator wires it to its own sockets)
+- [x] Rolling pipeline parallelism (eliminates inference stalls)
+      (`pipeline`: exact greedy flow-shop simulation of micro-batches across
+      shard stages with measured inter-stage transfer; makespan vs.
+      layer-serial baseline, speedup, steady-state bottleneck period,
+      per-slot timelines; `PipelineModel::from_plan` estimates stage costs
+      from shard weight bytes)
 - [x] Node-specific firmware generation via `askama` templating (Rust/C++, memory-safe)
-      (string-built templates today; askama migration pending)
+      (four compile-time checked askama templates under
+      `crates/tpt-crucible-alloy/templates/` — Rust/C++ firmware sources plus
+      bash/PowerShell master flash scripts; broken templates fail the build,
+      not a node's first boot)
 - [x] Master flashing script generation
 - [x] Heartbeat protocol implementation
 - [x] Wasm compilation target (`wasm32-unknown-unknown`) for the browser SiL demo
@@ -141,33 +180,85 @@ broken down per-crate using the key features from `spec2.txt` section 3.
 - [x] `--features fpga,swarm` cargo feature gating (per spec2.txt section 4.7;
       `swarm` is default-on, compiled-out targets fail with a rebuild hint)
 - [ ] **Milestone:** Load TinyLlama, partition via Alloy, flash to 16 ESP32s
+      (SiL dry run of the full pipeline is proven end-to-end in
+      `crates/tpt-crucible-alloy/tests/swarm_end_to_end.rs`: real GGUF
+      ingestion → 16-node hybrid partitioning + KV planning → firmware/flash
+      generation → engine deploy → mid-flight node death → automatic
+      recovery → rolling-pipeline scheduling.
+      **Physical leg started on real hardware**: an ESP32-C3 (rev v0.4,
+      4 MB XMC flash, MAC `e8:3d:c1:83:72:d8`, probed via esptool on COM5)
+      now runs `no_std` esp-hal firmware (`hardware/esp32c3-heartbeat/`)
+      broadcasting protocol-conformant heartbeat records at 1 Hz over its
+      USB-Serial/JTAG port; captured records decode through the production
+      codec and drive the production `FailureDetector`
+      (`alloy/tests/heartbeat_firmware_conformance.rs`). Remaining for the
+      full milestone: 15 more boards, WiFi transport replacing the serial
+      link, and the executor to run real shards.)
 
 ## Phase 2: The Silicon Canvas (Months 6-12)
 
 ### tpt-crucible-fusion
 
 - [ ] Hardware description via `rust-hdl`
+      (v1 emits hand-written parameterized Verilog-2001 instead — see
+      `rtl.rs`; migrating generation to rust-hdl stays open as the tracked
+      follow-up)
 - [ ] HBM auto-router (wires compute arrays to HBM pins via pre-verified memory controllers)
-- [ ] FPGA overlay architecture (writes weight data + datapath config into a pre-synthesized overlay instead of triggering full resynthesis; ~10s per-model compile)
-- [ ] Yosys/Nextpnr wrappers (`std::process::Command` / FFI)
+      (`overlay`: v1 assigns banks → HBM pseudo-channels round-robin in
+      `.fusecfg`; pin-level routing lands with the real bitstream backend)
+- [x] FPGA overlay architecture (writes weight data + datapath config into a pre-synthesized overlay instead of triggering full resynthesis; ~10s per-model compile)
+      (`overlay::plan_overlay`: BRAM-bank staging per GEMM layer + DSP
+      accounting + HBM channel assignment, emitted as versioned `.fusecfg`;
+      pure planning, microsecond-scale, no synthesis in the loop)
+- [x] Yosys/Nextpnr wrappers (`std::process::Command` / FFI)
+      (`tools`: silent subprocess wrappers behind an injectable `ToolRunner`;
+      missing binaries surface as structured `Error::ExternalTool` values
+      with install hints; v1 covers elaboration + place-and-route entry
+      points)
 - [ ] LiteX/LiteDRAM integration via generated Verilog wrappers
-- [ ] Output: synthesizable RTL, memory initialization files, `.fusecfg` overlay configuration files
+- [x] Output: synthesizable RTL, memory initialization files, `.fusecfg` overlay configuration files
+      (`compile` produces an `OverlayBundle`: `overlay.fusecfg`,
+      `rtl/mac_array.v`, per-layer `$readmemh` meminit files;
+      `tpt compile --target fusion --out-dir` writes it)
 - [ ] **Milestone:** Select a Xilinx Alveo FPGA board, output a ready-to-flash bitstream using HBM
-- [ ] `alloy`<->`fusion` bridge for hybrid boards: `fusion::compile` targets
+- [x] `alloy`<->`fusion` bridge for hybrid boards: `fusion::compile` targets
       `tpt_crucible_alloy::topology::FpgaProfile` as its output contract, once
       it's more than a stub (see matching items under `tpt-crucible-alloy`)
+      (fusion depends on alloy and converts its `FpgaProfile` directly;
+      hybrid-board partitioning already plans against the same profile)
 
 ## Phase 3: The Physics Engine (Year 2)
 
 ### tpt-crucible-element
 
-- [ ] Xyce/ngspice FFI bindings
-- [ ] SPICE netlist generation from TPT-IR weights (floating-point weights -> physical electrical components)
-- [ ] "Reality Check" engine: injects simulated thermal noise, voltage drift, component tolerance errors
-- [ ] Hardware mitigation suggestions
+- [x] Xyce/ngspice FFI bindings
+      (v1 drives ngspice in batch mode via `std::process::Command` —
+      `simulator::run_ngspice` runs a rendered netlist (opt-in
+      `.control`/`wrdata` export block) and parses the operating point back;
+      missing binaries surface as structured `Error::ExternalTool` values;
+      in-process shared-library FFI and the Xyce adapter remain open)
+- [x] SPICE netlist generation from TPT-IR weights (floating-point weights -> physical electrical components)
+      (`netlist`: float MatMul layers extracted as crossbar MAC arrays — VCCS
+      `G`-element transconductance bank per weight + load resistors so
+      `V(out_i) = R·Σ W[i][j]·V(in_j)`; `.temp`/`.op`/`.end` deck renders for
+      ngspice/Xyce; quantized payloads rejected with dequantize guidance)
+- [x] "Reality Check" engine: injects simulated thermal noise, voltage drift, component tolerance errors
+      (`reality`: seeded xorshift* Monte-Carlo over the three factors,
+      Irwin–Hall normals, evenly spaced row sampling with caps; reports mean/
+      max deviation, confidence score = fraction of outputs inside tolerance,
+      and dominant-factor attribution via single-factor isolation runs)
+- [x] Hardware mitigation suggestions
+      (rule-based on the dominant factor: calibration DACs / precision parts
+      for tolerance, dedicated LDO + chopper auto-zero for drift, impedance /
+      averaging for thermal; plus confidence-threshold derating advice)
 - [ ] `ort`-based ML model to predict drift instantly
-- [ ] PCB layout recommendation output
-- [ ] Confidence score output
+- [x] PCB layout recommendation output
+      (`pcb`: universal analog hygiene — star ground, guard rings, decoupling
+      — plus geometry-driven advice (input-bus segmentation, output mux
+      placement) and physics-driven blocks keyed to the dominant factor)
+- [x] Confidence score output
+      (`RealityReport.confidence`, surfaced by `tpt compile --target element`
+      alongside `netlist.sp` and `reality_report.json` artifacts)
 - [ ] **Milestone:** Design a 3-layer analog NN, simulate thermal drift, output a KiCad PCB
 
 ## Phase 4: The Observer (Year 2+)
@@ -185,11 +276,22 @@ broken down per-crate using the key features from `spec2.txt` section 3.
 
 ### tpt-crucible-observer-web (8th workspace crate, pure Rust frontend)
 
-- [ ] Scaffold as a Leptos app (`crates/tpt-crucible-observer-web`), built via `cargo-leptos`, targeting `wasm32-unknown-unknown`
-- [ ] Cyberpunk-industrial UI, reactive telemetry views wired to the Observer WebSocket backend
+- [x] Scaffold as a Leptos app (`crates/tpt-crucible-observer-web`), built via `cargo-leptos`, targeting `wasm32-unknown-unknown`
+      (Leptos 0.8 CSR scaffold compiles for wasm32-unknown-unknown; build/run
+      via trunk (`index.html`, `trunk serve`) — cargo-leptos not required at
+      this size; WebSocket client wired to the Observer `/ws` stream with a
+      locally-mirrored, regression-tested frame schema)
+- [x] Cyberpunk-industrial UI, reactive telemetry views wired to the Observer WebSocket backend
+      (v1: reactive live-telemetry table across all hardware families +
+      pre-flight blocker banner + link-status pill; deeper visualization
+      split into the wgpu item below)
 - [ ] 3D swarm topology + PCB visualization via `wgpu` directly (no Three.js/React Three Fiber -- hand-rolled scene rendering, runs via WebGPU with WebGL fallback in-browser)
-- [ ] "Industrial blueprint" dark-mode theme (styling approach TBD -- Leptos supports plain CSS/Tailwind-via-build-step; revisit when this phase starts)
+- [x] "Industrial blueprint" dark-mode theme (styling approach TBD -- Leptos supports plain CSS/Tailwind-via-build-step; revisit when this phase started)
+      (decision made: plain CSS in `assets/style.css` — grid-paper backdrop,
+      neon-cyan accents, monospace; Tailwind stays available if the UI grows)
 - [ ] **Milestone:** Dashboard unifying telemetry across Alloy/Fusion/Element hardware types
+      (UI renders all families from one schema; milestone needs live
+      multi-source validation against real emitters)
 
 ## Accessibility & Democratization (cross-cutting, spec2.txt section 4.7)
 
@@ -213,6 +315,17 @@ broken down per-crate using the key features from `spec2.txt` section 3.
       MSRV/deprecation/yanking rules)
 - [ ] Publish order respected: `common` -> `catalyst` -> {`fusion`, `element`, `alloy`} -> `cli`; `observer` and `observer-web` optional
       (publish workflow encodes this order; needs a real registry run to verify)
+      (probed locally 2026-08-26: `cargo publish --dry-run -p
+      tpt-crucible-common` passes cleanly; every downstream crate currently
+      aborts because internal path deps carry no version yet — see next item)
 - [ ] Decide whether `tpt-crucible-observer-web` is published to crates.io at all (frontend wasm binaries are unusual crates.io citizens) or just built/deployed from the workspace without publishing
-- [ ] Add `version` to internal path dependencies once the first crate is published
+- [x] Add `version` to internal path dependencies once the first crate is published
+      (done proactively: `{ path, version = "0.1.0" }` in
+      `[workspace.dependencies]`; harmless pre-publish since `path` wins for
+      local builds, and it clears the packaging-time "dependency needs a
+      version" error for every internal crate)
 - [ ] `cargo publish --dry-run` passes for every crate, in dependency order
+      (`tpt-crucible-common` passes fully. Downstream crates now package
+      cleanly but their dependency resolution targets the registry, so their
+      dry-runs only complete after the first real publish cascades;
+      `uir-adapter`/`cli` additionally wait on `tpt-uir` publishing)

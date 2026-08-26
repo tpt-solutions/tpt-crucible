@@ -1,0 +1,7 @@
+[build]
+target = "riscv32imc-unknown-none-elf"
+
+# esp-hal ships linkall.x (vector table + memory map); linking it defines
+# the interrupt<N> trap vectors the HAL references.
+[target.riscv32imc-unknown-none-elf]
+rustflags = ["-C", "link-arg=-Tlinkall.x"]

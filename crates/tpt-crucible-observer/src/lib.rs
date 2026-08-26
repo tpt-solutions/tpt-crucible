@@ -43,7 +43,6 @@ pub fn status() -> &'static str {
     "phase 4 (The Observer): telemetry schema + websocket backend live; \
      dashboard frontend pending"
 }
-
 /// Unified telemetry record schema shared by every hardware type.
 ///
 /// Defined now so Catalyst/Alloy can already emit events against a stable
@@ -64,6 +63,27 @@ pub struct TelemetryEvent {
     pub latency_ms: Option<f64>,
     /// Millisecond timestamp of the sample.
     pub timestamp_ms: u64,
+}
+
+/// Everything the WebSocket stream can carry, tagged on the wire with a
+/// `"kind"` field (`{"kind":"telemetry",...}` / `{"kind":"preflight",...}`).
+///
+/// The preflight variant is a pass-through JSON object (Catalyst's streaming
+/// operator-compatibility notices) so the Observer stays schema-agnostic
+/// about producer payloads while every frame remains self-describing.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ServerEvent {
+    /// A live hardware telemetry sample.
+    Telemetry(TelemetryEvent),
+    /// A streamed pre-flight compatibility event (opaque JSON object).
+    Preflight(serde_json::Value),
+}
+
+impl From<TelemetryEvent> for ServerEvent {
+    fn from(ev: TelemetryEvent) -> Self {
+        Self::Telemetry(ev)
+    }
 }
 
 #[cfg(test)]

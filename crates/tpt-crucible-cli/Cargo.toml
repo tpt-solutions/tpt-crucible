@@ -22,16 +22,23 @@ default = ["swarm"]
 swarm = ["dep:tpt-crucible-alloy"]
 # FPGA overlay backend (opt-in per spec2.txt §4.7).
 fpga = ["dep:tpt-crucible-fusion"]
+# HuggingFace Hub network fetch (pulls ureq/rustls into the binary).
+hub = ["tpt-crucible-catalyst/hub"]
 
 [dependencies]
 tpt-crucible-common = { workspace = true }
 tpt-crucible-catalyst = { workspace = true }
 tpt-crucible-alloy = { workspace = true, optional = true }
 tpt-crucible-fusion = { workspace = true, optional = true }
+tpt-crucible-element = { workspace = true }
+tpt-crucible-observer = { workspace = true }
 tpt-crucible-uir-adapter = { workspace = true }
 # Sibling checkout until `tpt-uir` publishes to crates.io (see todo.md).
 tpt-uir-serde = { path = "../../../tpt-uir/crates/tpt-uir-serde", features = ["std"] }
 clap = { workspace = true }
+serde_json = { workspace = true }
+# Current-thread runtime for the pre-flight WebSocket bridge.
+tokio = { version = "1", default-features = false, features = ["rt"] }
 
 [lints]
 workspace = true

@@ -1,0 +1,18 @@
+[package]
+name = "esp32c3-heartbeat"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Standalone hardware target: deliberately NOT part of the tpt-crucible
+# workspace (no_std cross-compilation, its own dependency tree).
+[workspace]
+
+[dependencies]
+# Flashed with `espflash flash <elf>` which provisions the C3 bootloader.
+esp-hal = { version = "0.22", features = ["esp32c3"] }
+
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1

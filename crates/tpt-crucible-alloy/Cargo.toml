@@ -18,6 +18,23 @@ petgraph = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 bincode = { workspace = true }
+# Compile-time firmware/script templates (spec2.txt section 3.4).
+askama = "0.12"
+# Host-side serial heartbeat bridge (`serial` feature): reads node frames
+# off a real wire into the failure detector. Native-only, opt-in.
+serialport = { version = "4", optional = true, default-features = false }
+
+[dev-dependencies]
+# Software-in-the-loop end-to-end test: real GGUF ingestion feeding the
+# planner/engine/pipeline stack.
+tpt-crucible-catalyst = { workspace = true }
+
+[features]
+serial = ["dep:serialport"]
+
+[[example]]
+name = "heartbeat_live"
+required-features = ["serial"]
 
 [lints]
 workspace = true

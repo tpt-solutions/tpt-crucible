@@ -17,5 +17,14 @@ tpt-crucible-common = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+# HuggingFace Hub fetch (`hub` feature): sync HTTPS client, native-only.
+# Kept opt-in so the core crate stays dependency-light and wasm-friendly.
+ureq = { version = "2", optional = true, default-features = false, features = [
+    "tls",
+] }
+
+[features]
+hub = ["dep:ureq"]
+
 [lints]
 workspace = true

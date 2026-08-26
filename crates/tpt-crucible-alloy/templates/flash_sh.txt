@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Master flashing script - parallel per-node esptool jobs.
+set -euo pipefail
+
+MODEL="{{ model }}"
+BOARD="{{ board }}"
+
+flash_one() {
+  local port=$1 idx=$2
+  esptool.py --chip "$BOARD" --port "$port" --baud 921600 \
+    write_flash 0x0 "firmware/node_${idx}/firmware.bin"
+}
+
+{% for t in targets %}flash_one "{{ t.port }}" {{ t.index }} &
+{% endfor -%}
+wait

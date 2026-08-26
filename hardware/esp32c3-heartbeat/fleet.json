@@ -1,0 +1,17 @@
+{
+  "_comment": "Discovered fleet profile: real hardware probed via esptool flash-id on 2026-08-26. Consumable as alloy topology::SwarmNode seed data.",
+  "nodes": [
+    {
+      "id": 0,
+      "name": "esp32c3-00",
+      "arch": "esp32",
+      "chip": "ESP32-C3 (QFN32) rev v0.4",
+      "mac": "e8:3d:c1:83:72:d8",
+      "memory_bytes": 400000,
+      "flash_bytes": 4194304,
+      "usb_port": "COM5",
+      "firmware": "heartbeat/1s-cadence",
+      "status": "live"
+    }
+  ]
+}

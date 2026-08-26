@@ -11,6 +11,110 @@ policy note in todo.md).
 
 ### Added
 
+- **Catalyst**: quantization auto-search (`autosearch` module + `tpt
+  quantize`): INT4-first per-layer planning against `--accuracy-budget`,
+  promoting fragile layers to Q8_0 most-fragile-first under a documented
+  root-sum-square error model; accepts measured `.tptprofile` sensitivity
+  sidecars or falls back to a graph-shape heuristic; emits a serializable
+  `QuantPlan` and exits non-zero when the budget is unreachable.
+- **Catalyst**: streaming pre-flight (`preflight` module + `tpt preflight`):
+  operator-compatibility events emitted as the graph is traversed against the
+  alloy/fusion/element capability matrix (supported / emulated / unsupported
+  with reasons); `--serve <addr>` binds the Observer telemetry server and
+  fans events out to WebSocket clients live.
+- **Observer**: tagged `ServerEvent` envelope on the WebSocket stream —
+  `{"kind":"telemetry",…}` and `{"kind":"preflight",…}` share one broadcast
+  channel; frames serialize once at emit time. *(Wire-format change:
+  telemetry frames now carry a `kind` tag — pre-1.0, see VERSIONING.md.)*
+- **Alloy**: runtime execution engine (`runtime`): coordinator-side control
+  plane that distributes bincode shard deployments keyed by stable node ids,
+  feeds heartbeats into the failure detector, and on silence automatically
+  re-partitions via dead-node bypass — surfacing `NodeLost`/`Recovered`/
+  `FleetLost` lifecycle events with generation tracking.
+- **Alloy**: rolling pipeline parallelism (`pipeline`): exact greedy flow-shop
+  simulation of micro-batches across pipeline stages (compute + measured
+  inter-stage transfer), reporting makespan vs. strict layer-serial,
+  speedup, steady-state bottleneck period, and per-slot timelines;
+  `PipelineModel::from_plan` estimates stage costs from shard weights.
+- **Element** (Phase 3 core): SPICE netlist generation from TPT-IR float
+  MatMul weights (`netlist`: VCCS transconductance banks + load resistors,
+  ngspice/Xyce-ready `.op` deck); "Reality Check" Monte-Carlo engine
+  (`reality`): seeded dependency-free xorshift* PRNG injecting component
+  tolerance, correlated supply drift, and Johnson–Nyquist noise, reporting
+  confidence score, deviation statistics, and dominant-factor attribution;
+  rule-based hardware mitigation suggestions; PCB layout recommendations
+  (`pcb`) keyed to array geometry and dominant physics. Wired into the CLI:
+  `tpt compile --target element --out-dir` writes `netlist.sp` +
+  `reality_report.json`.
+- **CLI**: `quantize` and `preflight` subcommands; element compile target now
+  synthesizes instead of failing.
+
+- **Fusion** (Phase 2 core): overlay compilation is live (`overlay` +
+  `rtl` + `tools`). `plan_overlay` stages GEMM weights contiguously into
+  BRAM banks with round-robin HBM pseudo-channel assignment and DSP
+  accounting, emitting a versioned `.fusecfg` (header comments + JSON body);
+  `emit_rtl` produces a parameterized Verilog-2001 MAC array plus per-layer
+  `$readmemh` memory-init files; Yosys elaboration and Nextpnr wrappers run
+  through an injectable `ToolRunner` with structured
+  `Error::ExternalTool` failures and install hints. `compile(graph,
+  &FpgaProfile, &CompileOptions)` returns the full bundle and fusion now
+  converts alloy's `topology::FpgaProfile` directly (the alloy<->fusion
+  bridge). CLI `--target fusion --out-dir` writes `overlay.fusecfg` + `rtl/`.
+- **Element**: ngspice batch-mode orchestration (`simulator::run_ngspice`)
+  — netlists can embed a `.control`/`wrdata` export block
+  (`NetlistOptions::export_node_voltages`) and the runner shells out, waits,
+  parses the operating point back into typed node voltages; missing binaries
+  surface as structured `Error::ExternalTool` values; live-simulator test
+  self-skips when ngspice is absent.
+- **common**: additive `Error::ExternalTool { tool, message }` variant for
+  structured external-toolchain failures.
+- **Workspace**: internal path dependencies now carry `version = "0.1.0"`
+  so packaging/dry-run resolution works for every internal crate.
+- **End-to-end SiL proof**: `alloy/tests/swarm_end_to_end.rs` runs real GGUF
+  ingestion → 16-node hybrid partitioning with KV planning → firmware/flash
+  generation → engine deployment → mid-flight node death → automatic
+  recovery → rolling-pipeline scheduling.
+
+- **Alloy**: firmware/script generation migrated from string building to
+  compile-time **askama templates** (`templates/firmware_rust|firmware_cxx|
+  flash_sh|flash_ps1`) per spec2 §3.4 — a broken template now fails
+  `cargo build` instead of shipping; output contract unchanged.
+- **Catalyst**: HuggingFace Hub network fetch behind an opt-in `hub`
+  feature (`ureq`/rustls): `fetch_repo_to` lists repo siblings via the Hub
+  API and syncs `config.json` + `*.safetensors` shards into a local cache
+  dir (atomic `.part` renames, size-skip resume), then feeds the existing
+  HF directory ingestion. Verified live against
+  `hf-internal-testing/tiny-random-LlamaForCausalLM`. Core crate stays
+  dependency-light and wasm-friendly with the feature off.
+- **CLI**: `tpt ingest <org/name> --hub` downloads through the catalyst
+  `hub` feature (`--features hub` on install); cache root override via
+  `TPT_HUB_CACHE`.
+- **Hardware-in-the-loop** (`hardware/esp32c3-heartbeat/`): a real
+  ESP32-C3 now runs `no_std` esp-hal firmware broadcasting the Alloy
+  heartbeat protocol (28-byte `TPTH`-framed records, 1 Hz) over its native
+  USB-Serial/JTAG port. Chip probed live via esptool (rev v0.4, 4 MB XMC
+  flash, MAC `e8:3d:c1:83:72:d8`); flashed with espflash; captured records
+  decode through the production codec and drive the production failure
+  detector (`alloy/tests/heartbeat_firmware_conformance.rs`). Discovered
+  profile committed as `fleet.json`. Panics halt heartbeats so the
+  coordinator flags the node dead - degradation by design.
+- **Observer web** (Phase 4 kickoff, new workspace crate
+  `tpt-crucible-observer-web`): Leptos 0.8 CSR dashboard scaffold —
+  WebSocket client for the Observer `/ws` stream, reactive live-telemetry
+  table across all hardware families, pre-flight blocker banner,
+  link-status pill, industrial-blueprint dark theme in plain CSS;
+  builds via trunk to fully static Wasm.
+
+### Changed
+
+- Observer `TelemetryServer::emit` now accepts any `impl Into<ServerEvent>`
+  (plain `TelemetryEvent`s still convert); `subscribe()` taps return
+  pre-serialized JSON lines.
+- Fusion `compile` signature upgraded from the old stub
+  (`fn compile(&Graph) -> Result<Vec<u8>>`) to the bundle API above.
+
+### Added (earlier in cycle)
+
 - Cargo workspace scaffold with seven crates: `tpt-crucible-common`,
   `-catalyst`, `-alloy`, `-fusion`, `-element`, `-observer`, and `-cli`.
 - **TPT-IR** in `tpt-crucible-common`: strongly-typed computation graph

@@ -12,6 +12,10 @@
 //! * [`heartbeat`] — node liveness protocol codec + failure detector.
 //! * [`recovery`] — dead-node bypass: re-partitioning onto survivors when the
 //!   [`heartbeat::FailureDetector`] flags nodes gone.
+//! * [`runtime`] — coordinator-side execution engine: shard deployments,
+//!   heartbeat-driven liveness, and automatic recovery.
+//! * [`pipeline`] — rolling micro-batch pipelining across pipeline stages,
+//!   with makespan/serial comparison that proves stall elimination.
 //! * [`firmware`] — per-node firmware projects and master flashing scripts.
 //!
 //! ## Example
@@ -39,7 +43,9 @@ pub mod firmware;
 pub mod heartbeat;
 pub mod kv_cache;
 pub mod partition;
+pub mod pipeline;
 pub mod recovery;
+pub mod runtime;
 pub mod topology;
 
 /// Re-export of the shared IR crate for downstream convenience.
