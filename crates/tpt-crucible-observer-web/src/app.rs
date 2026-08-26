@@ -7,6 +7,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::frames::{Frame, TelemetryRow};
+use crate::topology::TopologyMap;
 use crate::ws::{self, Dashboard};
 
 /// Default Observer address; overridable via `?obs=host:port` later.
@@ -96,6 +97,11 @@ pub fn App() -> impl IntoView {
                     </thead>
                     <tbody>{rows}</tbody>
                 </table>
+            </section>
+
+            <section class="panel topology">
+                <h2>"SWARM TOPOLOGY"</h2>
+                <TopologyMap rows=move || dashboard.get().telemetry />
             </section>
         </div>
     }

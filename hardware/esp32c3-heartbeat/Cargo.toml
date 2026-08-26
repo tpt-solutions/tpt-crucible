@@ -5,12 +5,25 @@ edition = "2021"
 publish = false
 
 # Standalone hardware target: deliberately NOT part of the tpt-crucible
-# workspace (no_std cross-compilation, its own dependency tree).
+# workspace (no_std cross-compilation for riscv32imc via the `esp` toolchain,
+# its own dependency tree). Host workspace commands (`cargo test/clippy
+# --workspace`) would fail trying to build it for the host triple. Coverage
+# instead comes from the dedicated `firmware` CI job, which installs espup and
+# runs `cargo +esp check` here; lint parity with the house rules is kept by
+# the [lints] section below.
 [workspace]
 
 [dependencies]
 # Flashed with `espflash flash <elf>` which provisions the C3 bootloader.
 esp-hal = { version = "0.22", features = ["esp32c3"] }
+
+# Same posture as the workspace (`unsafe_code = "forbid"`): this firmware
+# uses only esp-hal's safe APIs.
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
 
 [profile.release]
 opt-level = "s"

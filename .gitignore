@@ -3,6 +3,11 @@
 **/*.rs.bk
 *.pdb
 
+# Local hardware-bridge debug artifacts (serial bridge sessions at repo root)
+/dbg.log
+/hw_bridge.log
+/hw_bridge.err
+
 # Frontend (Next.js), once added under frontend/
 frontend/node_modules
 frontend/.next

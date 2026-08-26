@@ -1,0 +1,29 @@
+{
+  "name": "TPT Crucible",
+  "image": "mcr.microsoft.com/devcontainers/rust:1-bookworm",
+  "features": {
+    // wasm32 target for the browser SiL demo path (common/catalyst/alloy).
+    "ghcr.io/devcontainers/features/common-utils:2": {}
+  },
+  "postCreateCommand": "rustup component add rustfmt clippy && rustup target add wasm32-unknown-unknown",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "vadimcn.vscode-lldb",
+        "serayuzgur.clippy"
+      ],
+      "settings": {
+        "rust-analyzer.check.command": "clippy",
+        "files.watcherExclude": {
+          "**/target/**": true
+        }
+      }
+    }
+  },
+  "remoteEnv": {
+    // Serial-heartbeat bridge work against a real ESP32-C3 (optional).
+    "TPT_BRIDGE_DEFAULT_PORT": "/dev/ttyACM0"
+  }
+}

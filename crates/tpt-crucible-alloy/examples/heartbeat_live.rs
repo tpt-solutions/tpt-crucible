@@ -34,6 +34,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|v| v.parse().map_err(|_| "baud must be a number"))
         .transpose()?
         .unwrap_or(115_200);
+    let hard_stop_secs: u64 = args
+        .next()
+        .map(|v| v.parse().map_err(|_| "hard_stop_secs must be a number"))
+        .transpose()?
+        .unwrap_or(30);
 
     let started = Instant::now();
     println!("bridge : {port_name} @ {baud} baud, failure timeout {timeout_ms} ms");
@@ -55,9 +60,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut detector = FailureDetector::new(Duration::from_millis(timeout_ms));
     let mut sync = [0u8; 4]; // rolling window matching the TPTH magic
     let mut beats = 0u64;
+    let mut link_down = false;
 
     let first_beat_deadline = started + Duration::from_secs(10);
-    let hard_stop = started + Duration::from_secs(30);
+    let hard_stop = started + Duration::from_secs(hard_stop_secs);
+
+    /// One shared reporter for both link-error paths (read error between
+    /// records and mid-record): prints the verdict handoff and how many
+    /// partial record bytes were discarded.
+    fn note_link_lost(
+        started: Instant,
+        timeout_ms: u64,
+        err: &std::io::Error,
+        discarded: usize,
+    ) {
+        println!(
+            "[{:>7.3}s] LINK LOST ({err}) - discarding {discarded} trailing \
+             record byte(s), waiting out the {timeout_ms} ms silence window",
+            started.elapsed().as_secs_f64()
+        );
+    }
 
     loop {
         let now = Instant::now();
@@ -68,7 +90,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
         if now > hard_stop {
-            println!("bridge : {timeout_ms} ms window never breached within 30 s - node stayed alive");
+            println!(
+                "bridge : {timeout_ms} ms window never breached within \
+                 {hard_stop_secs} s - node stayed alive"
+            );
             return Ok(());
         }
 
@@ -79,6 +104,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 now.duration_since(started).as_secs_f64()
             );
             break;
+        }
+
+        // After a link error the OS delivers nothing more; idle briefly and
+        // let the timeout window above render the verdict.
+        if link_down {
+            std::thread::sleep(Duration::from_millis(50));
+            continue;
         }
 
         let mut byte = [0u8; 1];
@@ -94,13 +126,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Magic matched: read the remaining record bytes.
                 let mut rest = vec![0u8; RECORD_LEN - 4];
                 let mut got = 0;
+                let mut lost_mid_record = false;
                 while got < rest.len() {
                     match port.read(&mut rest[got..]) {
                         Ok(0) => {}
                         Ok(n) => got += n,
                         Err(e) if e.kind() == std::io::ErrorKind::TimedOut => continue,
-                        Err(e) => return link_lost(started, &e),
+                        Err(e) => {
+                            note_link_lost(started, timeout_ms, &e, got);
+                            link_down = true;
+                            lost_mid_record = true;
+                            break;
+                        }
                     }
+                }
+                if lost_mid_record {
+                    continue;
                 }
                 let msg = HeartbeatMsg::decode(&rest)?;
                 detector.record(&msg, Instant::now());
@@ -114,22 +155,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
             Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
-            Err(e) => return link_lost(started, &e),
+            Err(e) => {
+                // Physical unplug: the OS errors immediately, but the verdict
+                // still belongs to the timeout window. Keep polling. No
+                // partial record bytes were buffered on this path.
+                note_link_lost(started, timeout_ms, &e, 0);
+                link_down = true;
+            }
         }
     }
 
     println!(
         "summary: {} heartbeat(s) accepted, liveness failed after {} ms of silence",
         beats, timeout_ms
-    );
-    Ok(())
-}
-
-fn link_lost(started: Instant, e: &std::io::Error) -> Result<(), Box<dyn std::error::Error>> {
-    println!(
-        "[{:>7.3}s] LINK LOST ({e}) - heartbeats stopped; the detector's timeout \
-         window decides liveness from here",
-        started.elapsed().as_secs_f64()
     );
     Ok(())
 }

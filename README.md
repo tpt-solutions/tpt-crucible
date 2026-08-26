@@ -18,8 +18,15 @@ cargo install tpt-crucible-cli
 # ...or opt into specific hardware targets
 cargo install tpt-crucible-cli --features fpga,swarm
 
-# Ingest a GGUF model and compile it for an ESP32 swarm
-tpt ingest models/tinyllama.gguf --target alloy --output dist/tinyllama.tptpkg
+# Ingest a GGUF model into TPT-IR (emits <stem>.tptir)
+tpt ingest models/tinyllama.gguf --output models/tinyllama.tptir
+
+# Compile it for an ESP32 swarm: partition plan (+ optional --out-dir
+# firmware bundle); no hardware needed to see the plan
+tpt compile models/tinyllama.tptir --target alloy --nodes 16
+
+# Check every operator against every hardware family before you buy boards
+tpt preflight models/tinyllama.tptir
 ```
 
 No hardware required to get started — Alloy and Catalyst compile to WebAssembly for a zero-install, Software-in-the-Loop browser demo.
@@ -54,7 +61,7 @@ AI Model (.gguf / .safetensors / .onnx / .pt / .tflite / ...)
 | [`tpt-crucible-element`](crates/tpt-crucible-element) | Analog module — physics-to-weight mapping and thermal/noise circuit simulation |
 | [`tpt-crucible-alloy`](crates/tpt-crucible-alloy) | Swarm module — distributed graph partitioning and firmware generation for microcontroller swarms (ESP32, RP2040, RISC-V) |
 | [`tpt-crucible-observer`](crates/tpt-crucible-observer) | Real-time telemetry and hardware monitoring dashboard backend |
-| [`tpt-crucible-observer-web`](crates/tpt-crucible-observer-web) | Observer dashboard frontend — a Leptos (Rust/Wasm) app with `wgpu`-rendered 3D swarm topology and PCB views |
+| [`tpt-crucible-observer-web`](crates/tpt-crucible-observer-web) | Observer dashboard frontend — a Leptos (Rust/Wasm) app: live telemetry table, streaming pre-flight blockers, and an SVG swarm-topology map (3D `wgpu` views on the roadmap) |
 | [`tpt-crucible-cli`](crates/tpt-crucible-cli) | The unified `tpt` binary entrypoint |
 
 The entire suite, frontend included, is pure Rust — the Observer dashboard compiles to WebAssembly via Leptos/`cargo-leptos` and talks to `tpt-crucible-observer`'s WebSocket API, keeping one unified toolchain from compiler backend to generated firmware to UI.
@@ -76,7 +83,8 @@ The entire suite, frontend included, is pure Rust — the Observer dashboard com
 - **Phase 3 (Year 2): The Physics Engine** — Build `tpt-crucible-element`. *Milestone: design a 3-layer analog NN, simulate thermal drift, output a KiCad PCB.*
 - **Phase 4 (Year 2+): The Observer** — Build the `tpt-crucible-observer` dashboard to unify telemetry across all hardware types.
 
-See [todo.md](todo.md) for the full task-level checklist.
+See [todo.md](todo.md) for the full task-level checklist, and
+[docs/quickstart.md](docs/quickstart.md) for task-oriented walkthroughs.
 
 ## Contributing
 

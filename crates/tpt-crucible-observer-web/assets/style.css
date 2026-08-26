@@ -83,3 +83,31 @@ table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: left; padding: 6px 8px; border-bottom: 1px dashed var(--line); }
 th { color: var(--dim); font-weight: normal; letter-spacing: 2px; }
 tbody tr:hover { background: rgba(34, 211, 238, 0.06); }
+
+/* Swarm-topology SVG map (crates/tpt-crucible-observer-web/src/topology.rs). */
+.topology svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.topo-node circle {
+  fill: #0d141b;
+  stroke-width: 2;
+}
+.topo-node.alloy circle { stroke: var(--accent); }
+.topo-node.fusion circle { stroke: var(--warn); }
+.topo-node.element circle { stroke: #f472b6; }
+.topo-node.other circle { stroke: var(--dim); stroke-dasharray: 4 3; }
+.topo-label {
+  fill: var(--ink);
+  font-size: 10px;
+  text-anchor: middle;
+  font-family: inherit;
+}
+.topo-family {
+  fill: var(--dim);
+  font-size: 8px;
+  letter-spacing: 2px;
+  text-anchor: middle;
+  font-family: inherit;
+}

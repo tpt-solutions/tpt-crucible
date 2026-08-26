@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
+# `hardware/esp32c3-heartbeat` is deliberately excluded: it is a no_std
+# riscv32imc firmware crate on its own `esp` toolchain and cannot build for
+# the host triple that `--workspace` commands target. It keeps lint parity
+# via its own [lints] table and is covered in CI by the dedicated `firmware`
+# job (espup + `cargo +esp check`); see that crate's Cargo.toml.
 
 [workspace.package]
 version = "0.1.0"

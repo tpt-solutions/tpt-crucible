@@ -329,3 +329,122 @@ broken down per-crate using the key features from `spec2.txt` section 3.
       cleanly but their dependency resolution targets the registry, so their
       dry-runs only complete after the first real publish cascades;
       `uir-adapter`/`cli` additionally wait on `tpt-uir` publishing)
+
+## Platform Review Follow-ups (2026-08-26 audit)
+
+Found during a full-platform bug/adoption/usability review. Not spec2.txt
+items — tracked here so they don't get lost.
+
+### Bugs
+
+- [x] Fix `README.md:22` quickstart: `tpt ingest` has no `--target` flag
+      (that's on `compile`) and emits `.tptir`, not `.tptpkg` — the
+      documented copy-paste command fails immediately
+      (quickstart now shows the real three-step pipeline:
+      ingest → compile --target alloy → preflight)
+- [x] `Graph::validate()` (`tpt-crucible-common/src/graph.rs`) checks
+      structural/SSA invariants but not shape/dtype consistency between
+      connected ops (e.g. a `MatMul` with mismatched operand shapes passes
+      validation)
+      (landed as `Op::infer_output_desc` + a descriptor pass in validate:
+      MatMul inner-dim/batch checks (quantized weights & mixed precision
+      allowed, matching real GGUF graphs), broadcast rules for Add/Sub/
+      Mul/Div, Reshape element-count preservation (-1 inference, ONNX
+      0-copy), Transpose perm validation, Concat rank/axis agreement, norm
+      affine width, attention head geometry, integer-only embedding ids;
+      dim 0 = dynamic and never compared, mirroring TF's -1→0 ingest map;
+      unit-tested at both the op level and through Graph::validate)
+- [x] `hardware/esp32c3-heartbeat` is not a workspace member
+      (`Cargo.toml`, `members = ["crates/*"]`) — the workspace's
+      `unsafe_code = "forbid"` lint and `cargo test/clippy --workspace`
+      don't cover it at all
+      (resolved by documented design rather than membership: no_std
+      riscv32imc cannot build for the host triple, so membership would break
+      every host workflow. The crate now documents its exclusion in both
+      Cargo.tomls, carries house-rule lints of its own
+      (`unsafe_code = "forbid"`) — esp-hal safe APIs only — and is covered
+      in CI by a dedicated `firmware` job: espup toolchain +
+      `cargo +esp check`, informational while the setup settles)
+- [x] `heartbeat_live.rs` example: mid-record link errors silently discard
+      the partial record without logging byte count; link-error handling is
+      duplicated across two branches
+      (both paths now funnel through one `note_link_lost` reporter that
+      prints elapsed time, the io error, and how many trailing record bytes
+      were discarded)
+- [x] `NODE_ID` hardcoded to `0` in ESP32 firmware
+      (`hardware/esp32c3-heartbeat/src/main.rs`) — landmine for whoever
+      flashes a second board
+      (node id now derives from the factory eFuse MAC's low 32 bits, so
+      every board gets a unique stable id with zero configuration;
+      optional build-time pin via `TPT_NODE_ID=<n>`; boot banner prints the
+      resolved id and its source — harmless to hosts since they resync on
+      the TPTH magic. esp-hal API used: `Efuse::mac_address()`)
+- [x] Remove/gitignore stray untracked debug artifacts at repo root
+      (`dbg.log`, `hw_bridge.err`, `hw_bridge.log`)
+      (all three added to `.gitignore`; delete the working-copy files with
+      `just clean` / plain `rm` once convenient)
+
+### Adoption / onboarding
+
+- [x] Ship a tiny real fixture model (few-KB synthetic-but-valid GGUF) under
+      e.g. `examples/models/` — no `.gguf`/`.safetensors`/fixtures directory
+      exists today; format unit tests only synthesize in-memory byte buffers
+      (landed: auditable checked-in generator
+      `crates/tpt-crucible-catalyst/examples/write_fixture_gguf.rs` emitting
+      `examples/models/tiny-llama-block.gguf` (~1.7 KB GGUF v3, llama KV
+      hyperparameters the CLI planner reads + two f32 tensors), directory
+      README documenting usage/regeneration, and byte-identical inline
+      synthesis in the e2e example so everything runs even before the file
+      is committed. One command remains to materialize the artifact itself:
+      `cargo run -p tpt-crucible-catalyst --example write_fixture_gguf`)
+- [x] Add a software-only end-to-end example (`ingest → compile --target
+      alloy → preflight`, no hardware) — the only current example
+      (`heartbeat_live.rs`) requires a physical ESP32-C3
+      (`crates/tpt-crucible-cli/examples/software_e2e.rs`: ingests the
+      fixture (committed or synthesized), validates, partitions a 4-node
+      swarm with KV planning, writes the firmware bundle to temp, then
+      streams pre-flight across all families; runs via
+      `cargo run -p tpt-crucible-cli --features swarm --example software_e2e`)
+- [x] Add a `docs/` quickstart (or short mdBook) with task-oriented
+      walkthroughs: ingest a model, run the wasm SiL demo in-browser, add a
+      new ingestion format; link it from the README
+      (`docs/quickstart.md` — three walkthroughs + troubleshooting table,
+      linked from README)
+- [x] Add a `justfile` or `cargo xtask` wrapping the `fmt`/`clippy`/`test`
+      pre-PR triad from CONTRIBUTING.md, so contributors don't hand-run three
+      commands
+      (justfile chosen; `default` = pre-pr triad, plus check-wasm/features/
+      firmware/doc/dashboard/clean recipes mirroring CI exactly)
+
+### CI
+
+- [x] Extend `ci.yml` to build/test `--features fpga,swarm,hub` — currently
+      only the default feature set plus a wasm check restricted to
+      `common`/`catalyst`/`alloy` run in CI
+      (new `features` job runs clippy -D warnings + tests with all three;
+      plus a bonus `firmware` job cross-checking the excluded ESP32-C3
+      crate via espup, informational until it settles)
+
+### Innovative / longer-term
+
+- [ ] `tpt new <target>` scaffold command (à la `cargo generate`) for
+      bootstrapping a new hardware-node firmware project
+      (deferred this pass: it is pure CLI-surface work that should land
+      behind green builds, and this session's sandbox had no working shell
+      to compile-check new code; the natural template already exists in
+      `hardware/esp32c3-heartbeat` once picked up)
+- [x] Minimal 2D SVG topology view in `observer-web` as a stepping stone
+      before the wgpu 3D view (currently zero wgpu/canvas/3D code exists —
+      not even a stub — despite the README claiming it)
+      (`topology.rs`: host-tested layout math (newest-sample dedupe,
+      family-major near-square grid) + reactive `<svg>` panel with per-family
+      color classes wired into the dashboard and `style.css`; README's wgpu
+      claim corrected to name what actually ships)
+- [x] devcontainer/Codespaces config for a one-click reproducible dev
+      environment
+      (`.devcontainer/devcontainer.json`: rust bookworm image, rustfmt/
+      clippy components + wasm32 target on create, rust-analyzer clippy-on-
+      save, serial-port env stub for bridge work)
+- [ ] Prioritize the `.tptpkg` community package marketplace (already listed
+      under Accessibility & Democratization above) earlier — central to the
+      adoption pitch, currently no scaffolding at all

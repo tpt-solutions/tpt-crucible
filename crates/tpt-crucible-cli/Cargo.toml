@@ -16,6 +16,12 @@ categories = ["compilers", "command-line-utilities", "development-tools"]
 name = "tpt"
 path = "src/main.rs"
 
+# Software-only pipeline walkthrough (ingest -> compile --target alloy ->
+# preflight); needs the default-on swarm backend.
+[[example]]
+name = "software_e2e"
+required-features = ["swarm"]
+
 [features]
 default = ["swarm"]
 # ESP32/RP2040 swarm backend (pure Rust, wasm-capable).

@@ -158,12 +158,14 @@ impl Graph {
         hist
     }
 
-    /// Validate structural invariants:
+    /// Validate structural and type-level invariants:
     ///
     /// * every edge targets an existing, earlier node (SSA / topological order),
     /// * op arities are respected,
     /// * `inputs`/`outputs` reference the right kinds of nodes,
-    /// * node names are unique.
+    /// * node names are unique,
+    /// * connected ops agree on shapes/dtypes where those are statically
+    ///   decidable (a `MatMul` with mismatched inner dimensions fails here).
     pub fn validate(&self) -> Result<()> {
         for (idx, n) in self.nodes.iter().enumerate() {
             let id = idx as u32;
@@ -218,6 +220,28 @@ impl Graph {
             if !seen.insert(&n.name) {
                 return Err(Error::DuplicateNodeName(n.name.clone()));
             }
+        }
+
+        // Type/shape consistency: infer each node's output descriptor from
+        // its op and its producers' descriptors, rejecting definitively
+        // inconsistent wiring. Dimensions stored as 0 mean "unknown/dynamic"
+        // (see `Op::infer_output_desc`) and are never compared, and ops with
+        // unknown inputs simply propagate the unknown.
+        let mut descs: Vec<Option<TensorDesc>> = Vec::with_capacity(self.nodes.len());
+        for (idx, n) in self.nodes.iter().enumerate() {
+            let ins: Vec<Option<TensorDesc>> = n
+                .inputs
+                .iter()
+                .map(|&i| descs[i.as_usize()].clone())
+                .collect();
+            let out = n.op.infer_output_desc(&ins).map_err(|e| match e {
+                Error::InvalidArgument(msg) => Error::InvalidArgument(format!(
+                    "node {idx} (`{}`): {msg}",
+                    n.name
+                )),
+                other => other,
+            })?;
+            descs.push(out);
         }
         Ok(())
     }
@@ -323,7 +347,7 @@ impl Graph {
 mod tests {
     use super::*;
     use crate::dtype::DType;
-    use crate::ops::{AttentionAttrs, SoftmaxAttrs};
+    use crate::ops::{AttentionAttrs, ReshapeAttrs, SoftmaxAttrs, TransposeAttrs};
     use crate::tensor::{Tensor, TensorDesc};
 
     fn scalar_desc() -> TensorDesc {
@@ -485,5 +509,176 @@ mod tests {
         assert!(dot.starts_with("digraph"));
         assert!(dot.contains("n4"));
         assert!(dot.contains("matmul"));
+    }
+
+    /// x → matmul(w), with caller-chosen operand shapes/dtypes.
+    fn matmul_graph(a: (Vec<usize>, DType), b: (Vec<usize>, DType)) -> Graph {
+        let mut g = Graph::new("mm");
+        let x = g.push("x", Op::Input(TensorDesc::new(a.0, a.1)), vec![]);
+        let w = g.push(
+            "w",
+            Op::Constant {
+                tensor: Tensor::zeros(TensorDesc::new(b.0, b.1)),
+            },
+            vec![],
+        );
+        g.push("mm", Op::MatMul, vec![x, w]);
+        g
+    }
+
+    #[test]
+    fn matmul_inner_dim_mismatch_rejected() {
+        let g = matmul_graph(
+            (vec![1, 8], DType::F32),
+            (vec![4, 8], DType::F32), // inner dims 8 vs 4
+        );
+        assert!(matches!(g.validate(), Err(Error::ShapeMismatch { .. })));
+    }
+
+    #[test]
+    fn quantized_weights_validate_like_real_gguf_graphs() {
+        // GGUF ingestion emits f32 activations against Q8_0 weight constants;
+        // mixed dtypes are first-class, so this must stay valid.
+        matmul_graph((vec![1, 8], DType::F32), (vec![8, 8], DType::Q8_0))
+            .validate()
+            .unwrap();
+    }
+
+    #[test]
+    fn dynamic_zero_dims_are_never_compared() {
+        // TensorFlow maps unknown dims to 0 at ingest; such models must keep
+        // validating even where static checks would otherwise apply.
+        matmul_graph((vec![0, 8], DType::F32), (vec![8, 8], DType::F32))
+            .validate()
+            .unwrap();
+    }
+
+    #[test]
+    fn broadcast_bias_ok_but_conflict_rejected() {
+        // Gemm's beta*C bias path: [16,8] + [8] broadcasts fine.
+        let mut ok = Graph::new("bias");
+        let y = ok.push("y", Op::Input(TensorDesc::new(vec![16, 8], DType::F32)), vec![]);
+        let c = ok.push(
+            "c",
+            Op::Constant {
+                tensor: Tensor::from_f32(vec![8], &[0.0; 8]),
+            },
+            vec![],
+        );
+        ok.push("add", Op::Add, vec![y, c]);
+        ok.validate().unwrap();
+
+        // [8] vs [3] is definitively wrong.
+        let mut bad = Graph::new("bad-bias");
+        let y = bad.push("y", Op::Input(TensorDesc::new(vec![16, 8], DType::F32)), vec![]);
+        let c = bad.push(
+            "c",
+            Op::Constant {
+                tensor: Tensor::from_f32(vec![3], &[0.0; 3]),
+            },
+            vec![],
+        );
+        bad.push("add", Op::Add, vec![y, c]);
+        assert!(matches!(bad.validate(), Err(Error::ShapeMismatch { .. })));
+    }
+
+    #[test]
+    fn transpose_bad_perm_rejected_with_context() {
+        let mut g = Graph::new("tp");
+        let x = g.push("x", Op::Input(TensorDesc::new(vec![2, 5], DType::F32)), vec![]);
+        g.push(
+            "t",
+            Op::Transpose {
+                attrs: TransposeAttrs { perm: vec![2, 0] },
+            },
+            vec![x],
+        );
+        match g.validate() {
+            Err(Error::InvalidArgument(msg)) => {
+                assert!(msg.contains("node 1 (`t`)"), "context missing: {msg}");
+            }
+            other => panic!("expected InvalidArgument, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reshape_count_mismatch_rejected_but_divisible_ok() {
+        let mut bad = Graph::new("rs");
+        let x = bad.push("x", Op::Input(TensorDesc::new(vec![12], DType::F32)), vec![]);
+        bad.push(
+            "r",
+            Op::Reshape {
+                attrs: ReshapeAttrs {
+                    shape: vec![-1, 7],
+                },
+            },
+            vec![x],
+        );
+        assert!(bad.validate().is_err());
+
+        let mut ok = Graph::new("rs-ok");
+        let x = ok.push("x", Op::Input(TensorDesc::new(vec![14], DType::F32)), vec![]);
+        ok.push(
+            "r",
+            Op::Reshape {
+                attrs: ReshapeAttrs {
+                    shape: vec![-1, 7],
+                },
+            },
+            vec![x],
+        );
+        ok.validate().unwrap();
+    }
+
+    #[test]
+    fn embedding_non_integer_ids_rejected() {
+        let mut g = Graph::new("emb");
+        let w = g.push(
+            "w",
+            Op::Constant {
+                tensor: Tensor::from_f32(vec![64, 8], &vec![0.0; 512]),
+            },
+            vec![],
+        );
+        let ids = g.push(
+            "ids",
+            Op::Input(TensorDesc::new(vec![1, 2], DType::F32)),
+            vec![],
+        );
+        g.push("e", Op::Embedding, vec![w, ids]);
+        assert!(g.validate().is_err());
+    }
+
+    #[test]
+    fn attention_head_geometry_mismatch_rejected() {
+        let mk = |q_last: usize| {
+            let mut g = Graph::new("attn");
+            let attrs = AttentionAttrs {
+                num_heads: 4,
+                num_kv_heads: 2,
+                head_dim: 32,
+                causal: true,
+                scale: None,
+            };
+            let q = g.push(
+                "q",
+                Op::Input(TensorDesc::new(vec![1, 512, q_last], DType::F16)),
+                vec![],
+            );
+            let k = g.push(
+                "k",
+                Op::Input(TensorDesc::new(vec![1, 512, 64], DType::F16)),
+                vec![],
+            );
+            let v = g.push(
+                "v",
+                Op::Input(TensorDesc::new(vec![1, 512, 64], DType::F16)),
+                vec![],
+            );
+            g.push("", Op::Attention { attrs }, vec![q, k, v]);
+            g
+        };
+        mk(128).validate().unwrap(); // 4 heads * 32
+        assert!(mk(96).validate().is_err());
     }
 }

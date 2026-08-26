@@ -28,6 +28,7 @@
 
 pub mod app;
 pub mod frames;
+pub mod topology;
 pub mod ws;
 
 use leptos::prelude::*;

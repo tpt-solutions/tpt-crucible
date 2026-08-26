@@ -52,6 +52,43 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
 
+  # Feature-gated code paths (spec2.txt section 4.7) must compile and pass
+  # tests too: `fpga` pulls in fusion, `swarm` alloy (default), `hub` the
+  # ureq/rustls network stack. Host-only — none of these target wasm.
+  features:
+    name: features fpga,swarm,hub
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: clippy (all targets, all hardware features)
+        run: cargo clippy --workspace --all-targets --features fpga,swarm,hub -- -D warnings
+      - name: tests (all hardware features)
+        run: cargo test --workspace --features fpga,swarm,hub
+
+  # The ESP32-C3 heartbeat firmware lives outside the workspace on purpose
+  # (no_std riscv32imc via Espressif's `esp` toolchain); this is its coverage.
+  # continue-on-error while the espup download/toolchain install settles —
+  # flip it off once a few green runs accumulate.
+  firmware:
+    name: esp32c3 firmware cross-check
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install espup (Espressif Rust fork manager)
+        run: |
+          curl -L https://github.com/esp-rs/espup/releases/latest/download/espup-x86_64-unknown-linux-gnu -o /usr/local/bin/espup
+          chmod +x /usr/local/bin/espup
+      - name: Install riscv32imc esp toolchain
+        run: espup install --targets riscv32imc-unknown-none-elf
+      - name: Source export-esp.sh and check the firmware crate
+        working-directory: hardware/esp32c3-heartbeat
+        run: |
+          . $HOME/export-esp.sh
+          cargo +esp check --release
+
   wasm:
     name: wasm32 check (browser demo path)
     runs-on: ubuntu-latest
