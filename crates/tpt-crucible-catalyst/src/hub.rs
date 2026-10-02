@@ -104,14 +104,13 @@ pub fn fetch_repo_to(repo_id: &str, dest_root: &Path) -> Result<PathBuf> {
     // --- list repo files ---------------------------------------------------
     let api_url = format!("{DEFAULT_ENDPOINT}/api/models/{repo_id}");
     let response = agent.get(&api_url).call().map_err(|e| match e {
-        ureq::Error::Status(code, resp) => Error::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("hub listing failed: HTTP {code} ({})", resp.get_url()),
-        )),
-        other => Error::Io(std::io::Error::new(
-            std::io::ErrorKind::NetworkUnreachable,
-            format!("hub listing failed: {other}"),
-        )),
+        ureq::Error::Status(code, resp) => Error::Io(std::io::Error::other(format!(
+            "hub listing failed: HTTP {code} ({})",
+            resp.get_url()
+        ))),
+        other => Error::Io(std::io::Error::other(format!(
+            "hub listing failed: {other}"
+        ))),
     })?;
     let api: ApiModel =
         serde_json::from_reader(response.into_reader()).map_err(|e| Error::ParseFormat {
@@ -152,10 +151,9 @@ fn download(
             std::io::ErrorKind::NotFound,
             format!("fetch of {repo_id}/{file} failed: HTTP {code}"),
         )),
-        other => Error::Io(std::io::Error::new(
-            std::io::ErrorKind::NetworkUnreachable,
-            format!("fetch of {repo_id}/{file} failed: {other}"),
-        )),
+        other => Error::Io(std::io::Error::other(format!(
+            "fetch of {repo_id}/{file} failed: {other}"
+        ))),
     })?;
 
     if let Some(parent) = out_path.parent() {

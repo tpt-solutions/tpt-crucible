@@ -25,12 +25,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ---- 1. ingest -------------------------------------------------------
     let committed = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../examples/models/tiny-llama-block.gguf");
-    let synthesized;
     let model = if committed.exists() {
         println!("model   : {}", committed.display());
         committed
     } else {
-        synthesized = std::env::temp_dir().join(format!("tpt-e2e-{}.gguf", std::process::id()));
+        // The temp file is never deleted, so it exists on disk for as long
+        // as this process needs it; no handle needs keeping.
+        let synthesized = std::env::temp_dir().join(format!("tpt-e2e-{}.gguf", std::process::id()));
         std::fs::write(&synthesized, fixture_gguf_v3())?;
         println!(
             "model   : committed fixture missing - synthesized {}",
@@ -53,16 +54,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Mirror of the CLI's kv_from_metadata: GGUF hyperparameters drive the
     // KV-cache plan when present; drop it to see "kv-cache: skipped".
-    let kv_request = kv_from_metadata(&graph).map(
-        |(num_layers, num_kv_heads, head_dim)| alloy::kv_cache::KvCacheRequest {
+    let kv_request = kv_from_metadata(&graph).map(|(num_layers, num_kv_heads, head_dim)| {
+        alloy::kv_cache::KvCacheRequest {
             num_layers,
             num_kv_heads,
             head_dim,
             dtype: DType::F16,
             max_seq_len: 256,
             batch: 1,
-        },
-    );
+        }
+    });
 
     let opts = alloy::partition::PartitionOptions {
         strategy: Some(alloy::partition::Strategy::Hybrid),
@@ -131,7 +132,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         report.unsupported
     );
 
-    let _ = &synthesized; // kept alive so the temp file outlives ingestion
     if report.has_blockers() {
         println!("blockers: {}", report.unsupported_ops.join(", "));
         return Ok(()); // demo exits cleanly; scripts can treat this as signal

@@ -275,10 +275,13 @@ mod tests {
     use tpt_crucible_common::{DType, Op, Tensor, TensorDesc};
 
     fn gemm_graph(layers: &[(usize, usize)]) -> Graph {
+        // Parallel matmuls off one input: every layer's weight keeps its
+        // declared [rows, cols] shape while staying shape-valid, even when
+        // consecutive layers would not chain (rows_b != cols_a).
         let mut g = Graph::new("overlay-test");
-        let mut cur = g.push(
+        let x = g.push(
             "x",
-            Op::Input(TensorDesc::new(vec![1, layers[0].1], DType::F32)),
+            Op::Input(TensorDesc::new(vec![1, layers[0].0], DType::F32)),
             Vec::<_>::new(),
         );
         for (i, (rows, cols)) in layers.iter().enumerate() {
@@ -289,10 +292,16 @@ mod tests {
                 },
                 Vec::<_>::new(),
             );
-            cur = g.push(format!("fc{i}"), Op::MatMul, vec![cur, w]);
+            let y = g.push(format!("fc{i}"), Op::MatMul, vec![x, w]);
+            let o = g.push(
+                format!("out{i}"),
+                Op::Output {
+                    name: format!("y{i}"),
+                },
+                vec![y],
+            );
+            g.mark_output(o);
         }
-        let o = g.push("out", Op::Output { name: "y".into() }, vec![cur]);
-        g.mark_output(o);
         g
     }
 

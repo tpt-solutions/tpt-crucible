@@ -5,6 +5,9 @@ on:
     branches: [master, main]
   pull_request:
 
+# `crates/tpt-crucible-cli` and `tpt-crucible-uir-adapter` path-depend on a
+# `tpt-uir` sibling checkout (see their Cargo.toml comments), so every job
+# clones it next to this repository before running cargo.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -18,6 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Check out the tpt-uir sibling
+        run: git clone --depth 1 https://github.com/tpt-solutions/tpt-uir "$GITHUB_WORKSPACE/../tpt-uir"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -33,6 +38,8 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
+      - name: Check out the tpt-uir sibling
+        run: git clone --depth 1 https://github.com/tpt-solutions/tpt-uir "$GITHUB_WORKSPACE/../tpt-uir"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -48,6 +55,8 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
+      - name: Check out the tpt-uir sibling
+        run: git clone --depth 1 https://github.com/tpt-solutions/tpt-uir "$GITHUB_WORKSPACE/../tpt-uir"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
@@ -60,6 +69,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Check out the tpt-uir sibling
+        run: git clone --depth 1 https://github.com/tpt-solutions/tpt-uir "$GITHUB_WORKSPACE/../tpt-uir"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: clippy (all targets, all hardware features)
@@ -94,6 +105,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Check out the tpt-uir sibling
+        run: git clone --depth 1 https://github.com/tpt-solutions/tpt-uir "$GITHUB_WORKSPACE/../tpt-uir"
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown

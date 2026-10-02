@@ -56,15 +56,11 @@ pub fn layout(rows: &[TelemetryRow]) -> Vec<Placed> {
 
 /// Natural sort key stub removed — plain byte order keeps the pure fn
 /// deterministic; numeric-aware ordering can land with the wgpu view.
-
 /// SVG canvas size for a set of placements (viewBox dimensions).
 pub fn canvas_size(placed: &[Placed]) -> (f64, f64) {
     let max_col = placed.iter().map(|p| p.col).max().unwrap_or(0);
     let max_row = placed.iter().map(|p| p.row).max().unwrap_or(0);
-    (
-        (max_col + 1) as f64 * CELL_W,
-        (max_row + 1) as f64 * CELL_H,
-    )
+    ((max_col + 1) as f64 * CELL_W, (max_row + 1) as f64 * CELL_H)
 }
 
 /// CSS class suffix for a hardware family (kept in sync with style.css).
@@ -79,12 +75,14 @@ pub fn family_class(hw_type: &str) -> &'static str {
 
 /// The reactive SVG map: one labeled hex-ish disc per live node.
 #[component]
-pub fn TopologyMap(rows: impl Fn() -> Vec<TelemetryRow> + 'static) -> impl IntoView {
-    let placed = move || layout(&rows());
-    let size = move || canvas_size(&placed());
+pub fn TopologyMap(rows: impl Fn() -> Vec<TelemetryRow> + Send + Sync + 'static) -> impl IntoView {
+    // A `Memo` is `Copy`, so both reactive consumers can own it.
+    let placed = Memo::new(move |_| layout(&rows()));
+    let size = move || canvas_size(&placed.get());
 
     let nodes = move || {
-        placed()
+        placed
+            .get()
             .iter()
             .map(|p| {
                 let cx = p.col as f64 * CELL_W + CELL_W / 2.0;
@@ -162,7 +160,10 @@ mod tests {
         sorted.sort_by_key(|p| key(p));
         let ids: Vec<&str> = sorted.iter().map(|p| p.node_id.as_str()).collect();
         // alloy < element < fusion (family-major), ids alphabetical inside.
-        assert_eq!(ids, vec!["swarm-a", "swarm-b", "array-2", "board-1", "board-2"]);
+        assert_eq!(
+            ids,
+            vec!["swarm-a", "swarm-b", "array-2", "board-1", "board-2"]
+        );
         // Five items in three columns: the last one wraps to row 1, col 1.
         assert_eq!(sorted[4].row, 1);
         assert_eq!(sorted[4].col, 1);

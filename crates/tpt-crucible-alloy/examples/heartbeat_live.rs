@@ -68,12 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// One shared reporter for both link-error paths (read error between
     /// records and mid-record): prints the verdict handoff and how many
     /// partial record bytes were discarded.
-    fn note_link_lost(
-        started: Instant,
-        timeout_ms: u64,
-        err: &std::io::Error,
-        discarded: usize,
-    ) {
+    fn note_link_lost(started: Instant, timeout_ms: u64, err: &std::io::Error, discarded: usize) {
         println!(
             "[{:>7.3}s] LINK LOST ({err}) - discarding {discarded} trailing \
              record byte(s), waiting out the {timeout_ms} ms silence window",

@@ -228,7 +228,7 @@ mod tests {
         let mut g = Graph::new("analog-mlp");
         let x = g.push(
             "x",
-            Op::Input(TensorDesc::new(vec![1, cols], DType::F32)),
+            Op::Input(TensorDesc::new(vec![1, rows], DType::F32)),
             Vec::<_>::new(),
         );
         let w = g.push(
@@ -259,7 +259,7 @@ mod tests {
         let mut g = Graph::new("quant");
         let x = g.push(
             "x",
-            Op::Input(TensorDesc::new(vec![1], DType::F32)),
+            Op::Input(TensorDesc::new(vec![1, 1], DType::F32)),
             Vec::<_>::new(),
         );
         let mut t = Tensor::from_f32(vec![1, 1], &[1.0]);
