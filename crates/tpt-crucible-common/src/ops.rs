@@ -566,7 +566,7 @@ fn transpose_desc(d: &TensorDesc, attrs: &TransposeAttrs) -> Result<TensorDesc> 
             attrs.perm
         )));
     }
-    let shape = attrs.perm.iter().map(|&p| d.shape[p]).collect();
+    let shape: Vec<usize> = attrs.perm.iter().map(|&p| d.shape[p]).collect();
     Ok(TensorDesc::new(shape, d.dtype))
 }
 

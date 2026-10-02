@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::ops::Op;
+use crate::TensorDesc;
 
 /// Magic prefix of the compact binary container (`"TPTIR"` + format version).
 pub const BINARY_MAGIC: &[u8; 6] = b"TPTIR\x01";
