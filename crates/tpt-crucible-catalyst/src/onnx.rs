@@ -866,7 +866,8 @@ pub(crate) mod tests {
                 ],
             ),
         );
-        g.extend(ld(5, &tensor_msg("W", 1, &[2, 4], &[0.5; 8])));
+        // transB = 1: B is stored [N, K] = [4, 2] for X [1, 2] -> Y [1, 4].
+        g.extend(ld(5, &tensor_msg("W", 1, &[4, 2], &[0.5; 8])));
         g.extend(ld(5, &tensor_msg("B", 1, &[4], &[1.0; 4])));
         g.extend(ld(11, &value_info("X", 1, &[1, 2])));
         g.extend(ld(12, &value_info("Y", 1, &[1, 4])));

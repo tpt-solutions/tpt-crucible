@@ -394,7 +394,13 @@ fn known(d: usize) -> bool {
 fn fmt_shape(shape: &[usize]) -> String {
     let parts: Vec<String> = shape
         .iter()
-        .map(|d| if known(*d) { d.to_string() } else { "?".to_owned() })
+        .map(|d| {
+            if known(*d) {
+                d.to_string()
+            } else {
+                "?".to_owned()
+            }
+        })
         .collect();
     format!("[{}]", parts.join(", "))
 }
@@ -410,8 +416,18 @@ fn broadcast(a: Vec<usize>, b: Vec<usize>) -> Option<Vec<usize>> {
     let n = a.len().max(b.len());
     let mut out = Vec::with_capacity(n);
     for i in 0..n {
-        let da = a.get(a.len() - n + i).copied().unwrap_or(1);
-        let db = b.get(b.len() - n + i).copied().unwrap_or(1);
+        // Right-aligned indexing; a rank-deficient side falls back to the
+        // implicit leading-1 dimension.
+        let da = (a.len() + i)
+            .checked_sub(n)
+            .and_then(|idx| a.get(idx))
+            .copied()
+            .unwrap_or(1);
+        let db = (b.len() + i)
+            .checked_sub(n)
+            .and_then(|idx| b.get(idx))
+            .copied()
+            .unwrap_or(1);
         let dim = match (da, db) {
             (_, 1) => da,
             (1, _) => db,
@@ -539,6 +555,11 @@ fn attention_desc(
     if q_heads == 0 || kv_heads == 0 || hd == 0 {
         return Ok(q.clone());
     }
+    // Unknown-rank inputs propagate unchanged; the head arithmetic below
+    // would panic slicing an empty shape.
+    if q.shape.is_empty() {
+        return Ok(q.clone());
+    }
     expect_last(q, q_heads * hd, "q heads*head_dim")?;
     expect_last(k, kv_heads * hd, "kv heads*head_dim")?;
     expect_last(v, kv_heads * hd, "kv heads*head_dim")?;
@@ -551,22 +572,21 @@ fn attention_desc(
 fn transpose_desc(d: &TensorDesc, attrs: &TransposeAttrs) -> Result<TensorDesc> {
     let rank = d.shape.len();
     let mut seen = vec![false; rank];
-    let perm_ok =
-        attrs.perm.len() == rank
-            && attrs.perm.iter().all(|&p| {
-                if p >= rank || seen[p] {
-                    return false;
-                }
-                seen[p] = true;
-                true
-            });
+    let perm_ok = attrs.perm.len() == rank
+        && attrs.perm.iter().all(|&p| {
+            if p >= rank || seen[p] {
+                return false;
+            }
+            seen[p] = true;
+            true
+        });
     if !perm_ok {
         return Err(Error::InvalidArgument(format!(
             "transpose perm {:?} is not a permutation of rank {rank}",
             attrs.perm
         )));
     }
-    let shape = attrs.perm.iter().map(|&p| d.shape[p]).collect();
+    let shape: Vec<usize> = attrs.perm.iter().map(|&p| d.shape[p]).collect();
     Ok(TensorDesc::new(shape, d.dtype))
 }
 
@@ -585,7 +605,7 @@ fn reshape_desc(input: &TensorDesc, target: &[i64]) -> Result<TensorDesc> {
     let in_elems = input.num_elements();
     let any_unknown_in = input.shape.iter().any(|&d| !known(d));
 
-    let resolved: Vec<usize> = target
+    let mut resolved: Vec<usize> = target
         .iter()
         .enumerate()
         .map(|(i, &t)| match t {
@@ -595,18 +615,25 @@ fn reshape_desc(input: &TensorDesc, target: &[i64]) -> Result<TensorDesc> {
         })
         .collect();
 
-    if target.iter().any(|&t| t < 0) {
+    if let Some(infer_idx) = target.iter().position(|&t| t < 0) {
         // One inferred slot: with fully-known inputs the positive product
-        // must divide the element count exactly.
+        // must divide the element count exactly, and the slot takes the
+        // quotient. With unknown input dims the slot stays unknown.
         if !any_unknown_in {
-            let pos_prod: usize =
-                target.iter().filter(|&&t| t > 0).map(|&t| t as usize).product();
-            if pos_prod == 0 || in_elems % pos_prod != 0 {
+            // Divisor: every already-resolved dim, including -copied ones.
+            let known_prod: usize = resolved
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != infer_idx)
+                .map(|(_, d)| *d)
+                .product();
+            if known_prod == 0 || in_elems % known_prod != 0 {
                 return Err(Error::ShapeMismatch {
-                    expected: format!("reshape positives to divide {in_elems} elements"),
-                    actual: format!("positives multiply to {pos_prod}"),
+                    expected: format!("reshape known dims to divide {in_elems} elements"),
+                    actual: format!("known dims multiply to {known_prod}"),
                 });
             }
+            resolved[infer_idx] = in_elems / known_prod;
         }
         return Ok(TensorDesc::new(resolved, input.dtype));
     }
@@ -751,16 +778,12 @@ mod shape_tests {
         let bad = Op::Transpose {
             attrs: TransposeAttrs { perm: vec![2, 0] },
         };
-        assert!(bad
-            .infer_output_desc(&[desc(&[2, 5], DType::F32)])
-            .is_err());
+        assert!(bad.infer_output_desc(&[desc(&[2, 5], DType::F32)]).is_err());
 
         let dup = Op::Transpose {
             attrs: TransposeAttrs { perm: vec![0, 0] },
         };
-        assert!(dup
-            .infer_output_desc(&[desc(&[2, 5], DType::F32)])
-            .is_err());
+        assert!(dup.infer_output_desc(&[desc(&[2, 5], DType::F32)]).is_err());
     }
 
     #[test]
@@ -822,20 +845,14 @@ mod shape_tests {
 
         let emb = Op::Embedding;
         let out = emb
-            .infer_output_desc(&[
-                desc(&[32000, 64], DType::F16),
-                desc(&[1, 8], DType::I32),
-            ])
+            .infer_output_desc(&[desc(&[32000, 64], DType::F16), desc(&[1, 8], DType::I32)])
             .unwrap()
             .unwrap();
         assert_eq!(out.shape, vec![1, 8, 64]);
 
         // Non-integer ids are semantically wrong.
         assert!(emb
-            .infer_output_desc(&[
-                desc(&[32000, 64], DType::F16),
-                desc(&[1, 8], DType::F32),
-            ])
+            .infer_output_desc(&[desc(&[32000, 64], DType::F16), desc(&[1, 8], DType::F32),])
             .is_err());
     }
 
@@ -853,7 +870,10 @@ mod shape_tests {
         let q = desc(&[1, 512, 128], DType::F16); // 4 heads * 32
         let k = desc(&[1, 512, 64], DType::F16); // 2 kv * 32
         let v = desc(&[1, 512, 64], DType::F16);
-        let out = attn.infer_output_desc(&[q, k, v]).unwrap().unwrap();
+        let out = attn
+            .infer_output_desc(&[q.clone(), k.clone(), v.clone()])
+            .unwrap()
+            .unwrap();
         assert_eq!(out.shape, vec![1, 512, 128]);
 
         let bad_q = desc(&[1, 512, 96], DType::F16);

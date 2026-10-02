@@ -55,11 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     b.extend_from_slice(&2u64.to_le_bytes()); // tensor count
     b.extend_from_slice(&4u64.to_le_bytes()); // kv count
 
-    kv_string(
-        &mut b,
-        "general.architecture",
-        "llama",
-    );
+    kv_string(&mut b, "general.architecture", "llama");
     kv_u32(&mut b, "llama.block_count", 1);
     kv_u32(&mut b, "llama.attention.head_count", 2);
     kv_u32(&mut b, "llama.attention.key_length", 8);
@@ -80,11 +76,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         b.extend_from_slice(&(i as f32 * 0.125).to_le_bytes());
     }
 
-    let dir =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/models");
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/models");
     std::fs::create_dir_all(&dir)?;
     let out = dir.join("tiny-llama-block.gguf");
     std::fs::write(&out, &b)?;
-    println!("wrote {} ({} bytes)", out.canonicalize()?, b.len());
+    println!(
+        "wrote {} ({} bytes)",
+        out.canonicalize()?.display(),
+        b.len()
+    );
     Ok(())
 }

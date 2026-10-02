@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::ops::Op;
+use crate::TensorDesc;
 
 /// Magic prefix of the compact binary container (`"TPTIR"` + format version).
 pub const BINARY_MAGIC: &[u8; 6] = b"TPTIR\x01";
@@ -235,10 +236,9 @@ impl Graph {
                 .map(|&i| descs[i.as_usize()].clone())
                 .collect();
             let out = n.op.infer_output_desc(&ins).map_err(|e| match e {
-                Error::InvalidArgument(msg) => Error::InvalidArgument(format!(
-                    "node {idx} (`{}`): {msg}",
-                    n.name
-                )),
+                Error::InvalidArgument(msg) => {
+                    Error::InvalidArgument(format!("node {idx} (`{}`): {msg}", n.name))
+                }
                 other => other,
             })?;
             descs.push(out);
@@ -557,7 +557,11 @@ mod tests {
     fn broadcast_bias_ok_but_conflict_rejected() {
         // Gemm's beta*C bias path: [16,8] + [8] broadcasts fine.
         let mut ok = Graph::new("bias");
-        let y = ok.push("y", Op::Input(TensorDesc::new(vec![16, 8], DType::F32)), vec![]);
+        let y = ok.push(
+            "y",
+            Op::Input(TensorDesc::new(vec![16, 8], DType::F32)),
+            vec![],
+        );
         let c = ok.push(
             "c",
             Op::Constant {
@@ -570,7 +574,11 @@ mod tests {
 
         // [8] vs [3] is definitively wrong.
         let mut bad = Graph::new("bad-bias");
-        let y = bad.push("y", Op::Input(TensorDesc::new(vec![16, 8], DType::F32)), vec![]);
+        let y = bad.push(
+            "y",
+            Op::Input(TensorDesc::new(vec![16, 8], DType::F32)),
+            vec![],
+        );
         let c = bad.push(
             "c",
             Op::Constant {
@@ -585,7 +593,11 @@ mod tests {
     #[test]
     fn transpose_bad_perm_rejected_with_context() {
         let mut g = Graph::new("tp");
-        let x = g.push("x", Op::Input(TensorDesc::new(vec![2, 5], DType::F32)), vec![]);
+        let x = g.push(
+            "x",
+            Op::Input(TensorDesc::new(vec![2, 5], DType::F32)),
+            vec![],
+        );
         g.push(
             "t",
             Op::Transpose {
@@ -604,26 +616,30 @@ mod tests {
     #[test]
     fn reshape_count_mismatch_rejected_but_divisible_ok() {
         let mut bad = Graph::new("rs");
-        let x = bad.push("x", Op::Input(TensorDesc::new(vec![12], DType::F32)), vec![]);
+        let x = bad.push(
+            "x",
+            Op::Input(TensorDesc::new(vec![12], DType::F32)),
+            vec![],
+        );
         bad.push(
             "r",
             Op::Reshape {
-                attrs: ReshapeAttrs {
-                    shape: vec![-1, 7],
-                },
+                attrs: ReshapeAttrs { shape: vec![-1, 7] },
             },
             vec![x],
         );
         assert!(bad.validate().is_err());
 
         let mut ok = Graph::new("rs-ok");
-        let x = ok.push("x", Op::Input(TensorDesc::new(vec![14], DType::F32)), vec![]);
+        let x = ok.push(
+            "x",
+            Op::Input(TensorDesc::new(vec![14], DType::F32)),
+            vec![],
+        );
         ok.push(
             "r",
             Op::Reshape {
-                attrs: ReshapeAttrs {
-                    shape: vec![-1, 7],
-                },
+                attrs: ReshapeAttrs { shape: vec![-1, 7] },
             },
             vec![x],
         );
