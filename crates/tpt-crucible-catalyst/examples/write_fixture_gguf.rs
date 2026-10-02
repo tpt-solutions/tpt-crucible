@@ -85,6 +85,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(&dir)?;
     let out = dir.join("tiny-llama-block.gguf");
     std::fs::write(&out, &b)?;
-    println!("wrote {} ({} bytes)", out.canonicalize()?, b.len());
+    println!("wrote {} ({} bytes)", out.canonicalize()?.display(), b.len());
     Ok(())
 }
