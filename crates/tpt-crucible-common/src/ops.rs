@@ -394,7 +394,13 @@ fn known(d: usize) -> bool {
 fn fmt_shape(shape: &[usize]) -> String {
     let parts: Vec<String> = shape
         .iter()
-        .map(|d| if known(*d) { d.to_string() } else { "?".to_owned() })
+        .map(|d| {
+            if known(*d) {
+                d.to_string()
+            } else {
+                "?".to_owned()
+            }
+        })
         .collect();
     format!("[{}]", parts.join(", "))
 }
@@ -566,15 +572,14 @@ fn attention_desc(
 fn transpose_desc(d: &TensorDesc, attrs: &TransposeAttrs) -> Result<TensorDesc> {
     let rank = d.shape.len();
     let mut seen = vec![false; rank];
-    let perm_ok =
-        attrs.perm.len() == rank
-            && attrs.perm.iter().all(|&p| {
-                if p >= rank || seen[p] {
-                    return false;
-                }
-                seen[p] = true;
-                true
-            });
+    let perm_ok = attrs.perm.len() == rank
+        && attrs.perm.iter().all(|&p| {
+            if p >= rank || seen[p] {
+                return false;
+            }
+            seen[p] = true;
+            true
+        });
     if !perm_ok {
         return Err(Error::InvalidArgument(format!(
             "transpose perm {:?} is not a permutation of rank {rank}",
@@ -773,16 +778,12 @@ mod shape_tests {
         let bad = Op::Transpose {
             attrs: TransposeAttrs { perm: vec![2, 0] },
         };
-        assert!(bad
-            .infer_output_desc(&[desc(&[2, 5], DType::F32)])
-            .is_err());
+        assert!(bad.infer_output_desc(&[desc(&[2, 5], DType::F32)]).is_err());
 
         let dup = Op::Transpose {
             attrs: TransposeAttrs { perm: vec![0, 0] },
         };
-        assert!(dup
-            .infer_output_desc(&[desc(&[2, 5], DType::F32)])
-            .is_err());
+        assert!(dup.infer_output_desc(&[desc(&[2, 5], DType::F32)]).is_err());
     }
 
     #[test]
@@ -844,20 +845,14 @@ mod shape_tests {
 
         let emb = Op::Embedding;
         let out = emb
-            .infer_output_desc(&[
-                desc(&[32000, 64], DType::F16),
-                desc(&[1, 8], DType::I32),
-            ])
+            .infer_output_desc(&[desc(&[32000, 64], DType::F16), desc(&[1, 8], DType::I32)])
             .unwrap()
             .unwrap();
         assert_eq!(out.shape, vec![1, 8, 64]);
 
         // Non-integer ids are semantically wrong.
         assert!(emb
-            .infer_output_desc(&[
-                desc(&[32000, 64], DType::F16),
-                desc(&[1, 8], DType::F32),
-            ])
+            .infer_output_desc(&[desc(&[32000, 64], DType::F16), desc(&[1, 8], DType::F32),])
             .is_err());
     }
 
@@ -875,7 +870,8 @@ mod shape_tests {
         let q = desc(&[1, 512, 128], DType::F16); // 4 heads * 32
         let k = desc(&[1, 512, 64], DType::F16); // 2 kv * 32
         let v = desc(&[1, 512, 64], DType::F16);
-        let out = attn.infer_output_desc(&[q.clone(), k.clone(), v.clone()])
+        let out = attn
+            .infer_output_desc(&[q.clone(), k.clone(), v.clone()])
             .unwrap()
             .unwrap();
         assert_eq!(out.shape, vec![1, 512, 128]);

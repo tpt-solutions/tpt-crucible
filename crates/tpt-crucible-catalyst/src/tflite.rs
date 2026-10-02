@@ -449,19 +449,32 @@ fn build_operator(
                 // The adjoint swaps the last two dims and keeps batch dims,
                 // so the perm depends on the operand's rank.
                 if t.u8_field(0)?.unwrap_or(0) != 0 {
-                    let perm = adjoint_perm(tensors, *ins.first().ok_or_else(|| {
-                        flatbuf::malformed("BATCH_MATMUL missing input 0")
-                    })?)?;
-                    x = b.g.push("", Op::Transpose { attrs: TransposeAttrs { perm } }, vec![x]);
+                    let perm = adjoint_perm(
+                        tensors,
+                        *ins.first()
+                            .ok_or_else(|| flatbuf::malformed("BATCH_MATMUL missing input 0"))?,
+                    )?;
+                    x = b.g.push(
+                        "",
+                        Op::Transpose {
+                            attrs: TransposeAttrs { perm },
+                        },
+                        vec![x],
+                    );
                 }
                 if t.u8_field(1)?.unwrap_or(0) != 0 {
                     let perm = adjoint_perm(
                         tensors,
-                        *ins.get(1).ok_or_else(|| {
-                            flatbuf::malformed("BATCH_MATMUL missing input 1")
-                        })?,
+                        *ins.get(1)
+                            .ok_or_else(|| flatbuf::malformed("BATCH_MATMUL missing input 1"))?,
                     )?;
-                    y = b.g.push("", Op::Transpose { attrs: TransposeAttrs { perm } }, vec![y]);
+                    y = b.g.push(
+                        "",
+                        Op::Transpose {
+                            attrs: TransposeAttrs { perm },
+                        },
+                        vec![y],
+                    );
                 }
             }
             b.g.push("", Op::MatMul, vec![x, y])
