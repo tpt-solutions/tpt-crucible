@@ -343,6 +343,23 @@ fn fused_of(opt: Option<Tbl<'_>>) -> Result<u8> {
     }
 }
 
+/// Adjoint (transposed-last-two) permutation for a BatchMatMul operand,
+/// sized by the tensor's rank: rank 2 -> `[1, 0]`, rank 3 -> `[0, 2, 1]`, ...
+fn adjoint_perm(tensors: &[LiteTensor], tensor_idx: usize) -> Result<Vec<usize>> {
+    let rank = tensors
+        .get(tensor_idx)
+        .map(|t| t.desc.shape.len())
+        .ok_or_else(|| flatbuf::malformed("BatchMatMul operand tensor out of range"))?;
+    if rank < 2 {
+        return Err(Error::UnsupportedOperation(format!(
+            "BatchMatMul operands must have rank >= 2, got {rank}"
+        )));
+    }
+    let mut perm: Vec<usize> = (0..rank).collect();
+    perm.swap(rank - 1, rank - 2);
+    Ok(perm)
+}
+
 /// Lower one `Operator` table and register its output tensor.
 ///
 /// Operator fields: opcode_index(0) inputs(1) outputs(2)
@@ -429,23 +446,22 @@ fn build_operator(
             let mut x = in_id!(0);
             let mut y = in_id!(1);
             if let Some(t) = opt.filter(|_| opt_type == opts::BATCH_MATMUL) {
+                // The adjoint swaps the last two dims and keeps batch dims,
+                // so the perm depends on the operand's rank.
                 if t.u8_field(0)?.unwrap_or(0) != 0 {
-                    x = b.g.push(
-                        "",
-                        Op::Transpose {
-                            attrs: TransposeAttrs { perm: vec![1, 0] },
-                        },
-                        vec![x],
-                    );
+                    let perm = adjoint_perm(tensors, *ins.first().ok_or_else(|| {
+                        flatbuf::malformed("BATCH_MATMUL missing input 0")
+                    })?)?;
+                    x = b.g.push("", Op::Transpose { attrs: TransposeAttrs { perm } }, vec![x]);
                 }
                 if t.u8_field(1)?.unwrap_or(0) != 0 {
-                    y = b.g.push(
-                        "",
-                        Op::Transpose {
-                            attrs: TransposeAttrs { perm: vec![1, 0] },
-                        },
-                        vec![y],
-                    );
+                    let perm = adjoint_perm(
+                        tensors,
+                        *ins.get(1).ok_or_else(|| {
+                            flatbuf::malformed("BATCH_MATMUL missing input 1")
+                        })?,
+                    )?;
+                    y = b.g.push("", Op::Transpose { attrs: TransposeAttrs { perm } }, vec![y]);
                 }
             }
             b.g.push("", Op::MatMul, vec![x, y])
@@ -1097,7 +1113,9 @@ pub(crate) mod tests {
     #[test]
     fn batch_matmul_adjoint() {
         let bytes = assemble(|w| {
-            let t_x = tensor_table(w, "x", &[1, 2, 3], ty::FLOAT32, 0);
+            // adj_x = 1: x is stored [1, 3, 2] and adjointed to [1, 2, 3],
+            // then batch-matmul with y [1, 3, 2] -> o [1, 2, 2].
+            let t_x = tensor_table(w, "x", &[1, 3, 2], ty::FLOAT32, 0);
             let t_y = tensor_table(w, "y", &[1, 3, 2], ty::FLOAT32, 0);
             let t_o = tensor_table(w, "o", &[1, 2, 2], ty::FLOAT32, 0);
             let mm_opts = options_table(w, vec![fv(0, raw_u8(1)), fv(1, raw_u8(0))]);

@@ -1255,8 +1255,9 @@ pub(crate) mod tests {
         let c = |name: &str, dims: &[i64], raw: Vec<u8>| {
             node(name, "Const", &[], vec![value_attr(1, dims, &raw)])
         };
-        let a = c("a", &[2], f32_le(&[1.0, 2.0]));
-        let b = c("b", &[2], f32_le(&[3.0, 4.0]));
+        // Rank-2 values so concat along axis 1 is well-formed.
+        let a = c("a", &[2, 3], f32_le(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]));
+        let b = c("b", &[2, 3], f32_le(&[7.0, 8.0, 9.0, 10.0, 11.0, 12.0]));
         let axis = node(
             "axis",
             "Const",
